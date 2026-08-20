@@ -312,14 +312,14 @@
 <span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
-<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the "License");</span>
 <span class="c1"># you may not use this file except in compliance with the License.</span>
 <span class="c1"># You may obtain a copy of the License at</span>
 <span class="c1">#</span>
 <span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
-<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># distributed under the License is distributed on an "AS IS" BASIS,</span>
 <span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
@@ -366,30 +366,30 @@
 
 <span class="c1"># Fused post-transform codes for the proj_features assembler (SHPostOp in CUDA):</span>
 <span class="c1"># none -&gt; identity, shift -&gt; +0.5, shift_relu -&gt; max(x + 0.5, 0).</span>
-<span class="n">_POST_CODE</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;none&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;shift&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;shift_relu&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">}</span>
+<span class="n">_POST_CODE</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"none"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">"shift"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">"shift_relu"</span><span class="p">:</span> <span class="mi">2</span><span class="p">}</span>
 
 
 <span class="c1"># Gaussian depth modes (D/ED): use projection depth (controlled by global_z_order)</span>
 <span class="c1"># Hit distance modes (d/Ed): compute along-ray distance in rasterization</span>
-<span class="n">RenderMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span>
-<span class="n">RasterizeMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span>
+<span class="n">RenderMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"RGB"</span><span class="p">,</span> <span class="s2">"d"</span><span class="p">,</span> <span class="s2">"Ed"</span><span class="p">,</span> <span class="s2">"D"</span><span class="p">,</span> <span class="s2">"ED"</span><span class="p">,</span> <span class="s2">"RGB-d"</span><span class="p">,</span> <span class="s2">"RGB-Ed"</span><span class="p">,</span> <span class="s2">"RGB+D"</span><span class="p">,</span> <span class="s2">"RGB+ED"</span><span class="p">]</span>
+<span class="n">RasterizeMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"classic"</span><span class="p">,</span> <span class="s2">"antialiased"</span><span class="p">]</span>
 
 
 <div class="viewcode-block" id="RendererConfig">
 <a class="viewcode-back" href="../../apis/rasterization.html#gsplat.RendererConfig">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">RendererConfig</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Base class for public rasterizer selection configs.</span>
+<span class="w">    </span><span class="sd">"""Base class for public rasterizer selection configs.</span>
 
 <span class="sd">    Instantiate one of the concrete renderer configs instead of this base</span>
 <span class="sd">    class. Unsupported subclasses remain possible so future policies can fail</span>
-<span class="sd">    with an explicit &quot;unsupported&quot; error at the validation boundary.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    with an explicit "unsupported" error at the validation boundary.</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="k">if</span> <span class="bp">cls</span> <span class="ow">is</span> <span class="n">RendererConfig</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
-                <span class="s2">&quot;RendererConfig is a base class; instantiate &quot;</span>
-                <span class="s2">&quot;RendererConfig_MixedBatch or RendererConfig_ParallelBatch.&quot;</span>
+                <span class="s2">"RendererConfig is a base class; instantiate "</span>
+                <span class="s2">"RendererConfig_MixedBatch or RendererConfig_ParallelBatch."</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span></div>
 
@@ -399,12 +399,12 @@
 <a class="viewcode-back" href="../../apis/rasterization.html#gsplat.RendererConfig_MixedBatch">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">RendererConfig_MixedBatch</span><span class="p">(</span><span class="n">RendererConfig</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eval3d rasterizer: serial-batch forward, batch-parallel backward.</span>
+<span class="w">    </span><span class="sd">"""Eval3d rasterizer: serial-batch forward, batch-parallel backward.</span>
 
-<span class="sd">    &quot;Mixed&quot; = the two passes batch differently. The forward composites each</span>
-<span class="sd">    tile&#39;s depth-sorted Gaussian batches serially (one CTA per tile, front to</span>
+<span class="sd">    "Mixed" = the two passes batch differently. The forward composites each</span>
+<span class="sd">    tile's depth-sorted Gaussian batches serially (one CTA per tile, front to</span>
 <span class="sd">    back); the backward is batch-parallel (one CTA per batch).</span>
-<span class="sd">    &quot;&quot;&quot;</span></div>
+<span class="sd">    """</span></div>
 
 
 
@@ -412,30 +412,30 @@
 <a class="viewcode-back" href="../../apis/rasterization.html#gsplat.RendererConfig_ParallelBatch">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">RendererConfig_ParallelBatch</span><span class="p">(</span><span class="n">RendererConfig</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eval3d rasterizer: batch-parallel forward and backward.</span>
+<span class="w">    </span><span class="sd">"""Eval3d rasterizer: batch-parallel forward and backward.</span>
 
 <span class="sd">    Both passes are batch-parallel (one CTA per batch); the forward adds a</span>
 <span class="sd">    partials/scan/replay pipeline so independent batches composite concurrently,</span>
 <span class="sd">    at the cost of per-batch forward state persisted for the backward. The</span>
 <span class="sd">    backward kernel is shared with MixedBatch.</span>
-<span class="sd">    &quot;&quot;&quot;</span></div>
+<span class="sd">    """</span></div>
 
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_validate_renderer_config</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">:</span> <span class="n">RendererConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">if</span> <span class="n">renderer_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;renderer_config must be a RendererConfig instance, got None.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">"renderer_config must be a RendererConfig instance, got None."</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
-            <span class="s2">&quot;renderer_config must be a RendererConfig instance, &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="s2">"renderer_config must be a RendererConfig instance, "</span>
+            <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">."</span>
         <span class="p">)</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_MixedBatch</span><span class="p">):</span>
         <span class="k">return</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_ParallelBatch</span><span class="p">):</span>
         <span class="k">return</span>
     <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;Unsupported renderer_config type: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">.&quot;</span>
+        <span class="sa">f</span><span class="s2">"Unsupported renderer_config type: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">."</span>
     <span class="p">)</span>
 
 
@@ -446,26 +446,26 @@
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_ParallelBatch</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">renderer_config_parallel_batch</span><span class="p">()</span>
     <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;unreachable renderer_config: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="sa">f</span><span class="s2">"unreachable renderer_config: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">"</span>
     <span class="p">)</span>
 
 
 <span class="c1"># TODO: RenderMode should be an enum so that we can add these query methods to it.</span>
-<span class="c1"># The problem is that it&#39;d break backward compatibllity due to some symbols used, e.g. RGB+D or RGB-d.</span>
+<span class="c1"># The problem is that it'd break backward compatibllity due to some symbols used, e.g. RGB+D or RGB-d.</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">render_mode_has_color</span><span class="p">(</span><span class="n">mode</span><span class="p">:</span> <span class="n">RenderMode</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">}</span>
+    <span class="k">return</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"RGB"</span><span class="p">,</span> <span class="s2">"RGB-d"</span><span class="p">,</span> <span class="s2">"RGB-Ed"</span><span class="p">,</span> <span class="s2">"RGB+D"</span><span class="p">,</span> <span class="s2">"RGB+ED"</span><span class="p">}</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">render_mode_has_hit_distance</span><span class="p">(</span><span class="n">mode</span><span class="p">:</span> <span class="n">RenderMode</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">}</span>
+    <span class="k">return</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"d"</span><span class="p">,</span> <span class="s2">"Ed"</span><span class="p">,</span> <span class="s2">"RGB-d"</span><span class="p">,</span> <span class="s2">"RGB-Ed"</span><span class="p">}</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">render_mode_has_depth</span><span class="p">(</span><span class="n">mode</span><span class="p">:</span> <span class="n">RenderMode</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">}</span>
+    <span class="k">return</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"D"</span><span class="p">,</span> <span class="s2">"ED"</span><span class="p">,</span> <span class="s2">"RGB+D"</span><span class="p">,</span> <span class="s2">"RGB+ED"</span><span class="p">}</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">render_mode_has_expected_depth</span><span class="p">(</span><span class="n">mode</span><span class="p">:</span> <span class="n">RenderMode</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">}</span>
+    <span class="k">return</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"Ed"</span><span class="p">,</span> <span class="s2">"ED"</span><span class="p">,</span> <span class="s2">"RGB-Ed"</span><span class="p">,</span> <span class="s2">"RGB+ED"</span><span class="p">}</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">render_mode_has_depth_channel</span><span class="p">(</span><span class="n">mode</span><span class="p">:</span> <span class="n">RenderMode</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
@@ -486,33 +486,33 @@
     <span class="n">with_ut</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">rasterize_mode</span> <span class="o">!=</span> <span class="s2">&quot;classic&quot;</span> <span class="ow">and</span> <span class="p">(</span><span class="n">with_ut</span> <span class="ow">or</span> <span class="n">with_eval3d</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">rasterize_mode</span> <span class="o">!=</span> <span class="s2">"classic"</span> <span class="ow">and</span> <span class="p">(</span><span class="n">with_ut</span> <span class="ow">or</span> <span class="n">with_eval3d</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;3DGUT rendering only supports rasterize_mode=&#39;classic&#39;. &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;Got rasterize_mode=&#39;</span><span class="si">{</span><span class="n">rasterize_mode</span><span class="si">}</span><span class="s2">&#39; with &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;with_ut=</span><span class="si">{</span><span class="n">with_ut</span><span class="si">}</span><span class="s2"> and with_eval3d=</span><span class="si">{</span><span class="n">with_eval3d</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="s2">"3DGUT rendering only supports rasterize_mode='classic'. "</span>
+            <span class="sa">f</span><span class="s2">"Got rasterize_mode='</span><span class="si">{</span><span class="n">rasterize_mode</span><span class="si">}</span><span class="s2">' with "</span>
+            <span class="sa">f</span><span class="s2">"with_ut=</span><span class="si">{</span><span class="n">with_ut</span><span class="si">}</span><span class="s2"> and with_eval3d=</span><span class="si">{</span><span class="n">with_eval3d</span><span class="si">}</span><span class="s2">."</span>
         <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_get_default_nccl_process_group_name</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the default NCCL process-group name used by c10d functional ops.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Return the default NCCL process-group name used by c10d functional ops."""</span>
 
     <span class="k">if</span> <span class="ow">not</span> <span class="n">torch</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">is_available</span><span class="p">():</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;distributed=True requires torch.distributed to be available.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"distributed=True requires torch.distributed to be available."</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">torch</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">():</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;distributed=True requires an initialized default torch.distributed &quot;</span>
-            <span class="s2">&quot;process group.&quot;</span>
+            <span class="s2">"distributed=True requires an initialized default torch.distributed "</span>
+            <span class="s2">"process group."</span>
         <span class="p">)</span>
 
     <span class="kn">import</span><span class="w"> </span><span class="nn">torch.distributed.distributed_c10d</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">distributed_c10d</span>
 
     <span class="n">process_group</span> <span class="o">=</span> <span class="n">distributed_c10d</span><span class="o">.</span><span class="n">_get_default_group</span><span class="p">()</span>
     <span class="n">backend</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">get_backend</span><span class="p">(</span><span class="n">process_group</span><span class="p">)</span>
-    <span class="k">if</span> <span class="nb">str</span><span class="p">(</span><span class="n">backend</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">!=</span> <span class="s2">&quot;nccl&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="nb">str</span><span class="p">(</span><span class="n">backend</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">!=</span> <span class="s2">"nccl"</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;distributed=True currently supports only the default NCCL process &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;group; got backend &#39;</span><span class="si">{</span><span class="n">backend</span><span class="si">}</span><span class="s2">&#39;.&quot;</span>
+            <span class="s2">"distributed=True currently supports only the default NCCL process "</span>
+            <span class="sa">f</span><span class="s2">"group; got backend '</span><span class="si">{</span><span class="n">backend</span><span class="si">}</span><span class="s2">'."</span>
         <span class="p">)</span>
     <span class="k">return</span> <span class="n">distributed_c10d</span><span class="o">.</span><span class="n">_get_process_group_name</span><span class="p">(</span><span class="n">process_group</span><span class="p">)</span>
 
@@ -520,7 +520,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_resolve_tile_size</span><span class="p">(</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">height</span><span class="p">:</span> <span class="nb">int</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve a None-valued tile_size to the path-correct default.</span>
+<span class="w">    </span><span class="sd">"""Resolve a None-valued tile_size to the path-correct default.</span>
 
 <span class="sd">    The 3DGS kernel is compiled with TILE_SIZE=16 only; the 3DGUT kernel</span>
 <span class="sd">    dispatches at compile time on tile_size in {8, 16} and the optimum is</span>
@@ -540,7 +540,7 @@
 <span class="sd">    gate sees the right dims for lidar.</span>
 
 <span class="sd">    Explicit non-None tile_size is returned unchanged (caller override wins).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">tile_size</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">tile_size</span>
     <span class="k">if</span> <span class="n">with_eval3d</span><span class="p">:</span>
@@ -550,8 +550,8 @@
 
 <div class="viewcode-block" id="rasterization">
 <a class="viewcode-back" href="../../apis/rasterization.html#gsplat.rasterization">[docs]</a>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render&quot;</span><span class="p">)</span>
-<span class="nd">@capture_inputs</span><span class="p">(</span><span class="n">envvar</span><span class="o">=</span><span class="s2">&quot;GSPLAT_INPUT_CAPTURE_RASTERIZATION&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render"</span><span class="p">)</span>
+<span class="nd">@capture_inputs</span><span class="p">(</span><span class="n">envvar</span><span class="o">=</span><span class="s2">"GSPLAT_INPUT_CAPTURE_RASTERIZATION"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterization</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
@@ -572,13 +572,13 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">"RGB"</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
+    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="s2">"classic"</span><span class="p">,</span>
     <span class="n">channel_chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span>
     <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">"pinhole"</span><span class="p">,</span>
     <span class="n">segmented</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">with_ut</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
@@ -609,7 +609,7 @@
     <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Currently only None or 3 is accepted.</span>
     <span class="n">renderer_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">RendererConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).</span>
+<span class="w">    </span><span class="sd">"""Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).</span>
 
 <span class="sd">    This function provides a handful features for 3D Gaussian rasterization, which</span>
 <span class="sd">    we detail in the following notes. A complete profiling of the these features</span>
@@ -645,23 +645,23 @@
 <span class="sd">        **Depth Rendering**: This function supports colors or/and depths via `render_mode`.</span>
 
 <span class="sd">        **Gaussian Depth Modes** (use projection depth, controlled by `global_z_order`):</span>
-<span class="sd">        - &quot;D&quot;: Accumulated Gaussian depth :math:`\\sum_i w_i z_i`</span>
-<span class="sd">        - &quot;ED&quot;: Expected Gaussian depth :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`</span>
-<span class="sd">        - &quot;RGB+D&quot;: RGB + accumulated Gaussian depth</span>
-<span class="sd">        - &quot;RGB+ED&quot;: RGB + expected Gaussian depth</span>
+<span class="sd">        - "D": Accumulated Gaussian depth :math:`\\sum_i w_i z_i`</span>
+<span class="sd">        - "ED": Expected Gaussian depth :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`</span>
+<span class="sd">        - "RGB+D": RGB + accumulated Gaussian depth</span>
+<span class="sd">        - "RGB+ED": RGB + expected Gaussian depth</span>
 
 <span class="sd">        **Hit Distance Modes** (compute along-ray distance in rasterization):</span>
-<span class="sd">        - &quot;d&quot;: Accumulated hit distance :math:`\\sum_i w_i d_i`</span>
-<span class="sd">        - &quot;Ed&quot;: Expected hit distance :math:`\\frac{\\sum_i w_i d_i}{\\sum_i w_i}`</span>
-<span class="sd">        - &quot;RGB-d&quot;: RGB + accumulated hit distance</span>
-<span class="sd">        - &quot;RGB-Ed&quot;: RGB + expected hit distance</span>
+<span class="sd">        - "d": Accumulated hit distance :math:`\\sum_i w_i d_i`</span>
+<span class="sd">        - "Ed": Expected hit distance :math:`\\frac{\\sum_i w_i d_i}{\\sum_i w_i}`</span>
+<span class="sd">        - "RGB-d": RGB + accumulated hit distance</span>
+<span class="sd">        - "RGB-Ed": RGB + expected hit distance</span>
 
-<span class="sd">        &quot;RGB&quot; renders only the colored image. For combined modes, depth is the last channel.</span>
+<span class="sd">        "RGB" renders only the colored image. For combined modes, depth is the last channel.</span>
 <span class="sd">        When extra_signals are present, render_colors is RGB + depth only (4 channels);</span>
-<span class="sd">        extra channels are returned in ``meta[&quot;render_extra_signals&quot;]``.</span>
+<span class="sd">        extra channels are returned in ``meta["render_extra_signals"]``.</span>
 
 <span class="sd">    .. note::</span>
-<span class="sd">        **Extra signals**: Optional `extra_signals` are rendered and returned in ``meta[&quot;render_extra_signals&quot;]``</span>
+<span class="sd">        **Extra signals**: Optional `extra_signals` are rendered and returned in ``meta["render_extra_signals"]``</span>
 <span class="sd">        (shape [..., C, height, width, E]). If `extra_signals_sh_degree` is set, extra_signals are</span>
 <span class="sd">        SH coefficients of shape [N, K, E] (shared across batch/camera dims), evaluated per view.</span>
 
@@ -692,7 +692,7 @@
 <span class="sd">        `radius_clip` to 0.0.</span>
 
 <span class="sd">    .. note::</span>
-<span class="sd">        **Antialiased Rendering**: If `rasterize_mode` is &quot;antialiased&quot;, the function will</span>
+<span class="sd">        **Antialiased Rendering**: If `rasterize_mode` is "antialiased", the function will</span>
 <span class="sd">        apply a view-dependent compensation factor</span>
 <span class="sd">        :math:`\\rho=\\sqrt{\\frac{Det(\\Sigma)}{Det(\\Sigma+ \\epsilon I)}}` to Gaussian</span>
 <span class="sd">        opacities, where :math:`\\Sigma` is the projected 2D covariance matrix and :math:`\\epsilon`</span>
@@ -702,7 +702,7 @@
 <span class="sd">    .. note::</span>
 <span class="sd">        **AbsGrad**: If `absgrad` is True, the absolute gradients of the projected</span>
 <span class="sd">        2D means will be computed during the backward pass, which could be accessed by</span>
-<span class="sd">        `meta[&quot;means2d&quot;].absgrad`. This is an implementation of the paper</span>
+<span class="sd">        `meta["means2d"].absgrad`. This is an implementation of the paper</span>
 <span class="sd">        `AbsGS: Recovering Fine Details for 3D Gaussian Splatting &lt;https://arxiv.org/abs/2404.10484&gt;`_,</span>
 <span class="sd">        which is shown to be more effective for splitting Gaussians during training.</span>
 
@@ -718,7 +718,7 @@
 
 <span class="sd">    Args:</span>
 <span class="sd">        means: The 3D centers of the Gaussians. [..., N, 3]</span>
-<span class="sd">        quats: The quaternions of the Gaussians (wxyz convension). It&#39;s not required to be normalized. [..., N, 4]</span>
+<span class="sd">        quats: The quaternions of the Gaussians (wxyz convension). It's not required to be normalized. [..., N, 4]</span>
 <span class="sd">        scales: The scales of the Gaussians. [..., N, 3]</span>
 <span class="sd">        opacities: The opacities of the Gaussians. [..., N]</span>
 <span class="sd">        colors: The colors of the Gaussians. [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients (shared across batch/camera dims).</span>
@@ -745,26 +745,26 @@
 <span class="sd">        tile_size: The size of the tiles for rasterization. Default is 16.</span>
 <span class="sd">            (Note: other values are not tested)</span>
 <span class="sd">        backgrounds: The background colors. [..., C, D]. Default is None.</span>
-<span class="sd">        render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;d&quot;, &quot;Ed&quot;, &quot;D&quot;, &quot;ED&quot;,</span>
-<span class="sd">            &quot;RGB-d&quot;, &quot;RGB-Ed&quot;, &quot;RGB+D&quot;, and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image.</span>
+<span class="sd">        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED",</span>
+<span class="sd">            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image.</span>
 <span class="sd">            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance</span>
 <span class="sd">            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)</span>
-<span class="sd">            are normalized by opacity. Default is &quot;RGB&quot;.</span>
+<span class="sd">            are normalized by opacity. Default is "RGB".</span>
 <span class="sd">        sparse_grad: If true, the gradients for {means, quats, scales} will be stored in</span>
 <span class="sd">            a COO sparse layout. This can be helpful for saving memory. Default is False.</span>
 <span class="sd">        absgrad: If true, the absolute gradients of the projected 2D means</span>
 <span class="sd">            will be computed during the backward pass, which could be accessed by</span>
-<span class="sd">            `meta[&quot;means2d&quot;].absgrad`. Default is False.</span>
-<span class="sd">        rasterize_mode: The rasterization mode. Supported modes are &quot;classic&quot; and</span>
-<span class="sd">            &quot;antialiased&quot;. Default is &quot;classic&quot;.</span>
+<span class="sd">            `meta["means2d"].absgrad`. Default is False.</span>
+<span class="sd">        rasterize_mode: The rasterization mode. Supported modes are "classic" and</span>
+<span class="sd">            "antialiased". Default is "classic".</span>
 <span class="sd">        channel_chunk: The number of channels to render in one go. Default is 32.</span>
 <span class="sd">            If the required rendering channels are larger than this value, the rendering</span>
 <span class="sd">            will be done looply in chunks.</span>
 <span class="sd">        distributed: Whether to use distributed rendering. Default is False. If True,</span>
 <span class="sd">            The input Gaussians are expected to be a subset of scene in each rank, and</span>
 <span class="sd">            the function will collaboratively render the images for all ranks.</span>
-<span class="sd">        camera_model: The camera model to use. Supported models are &quot;pinhole&quot;, &quot;ortho&quot;,</span>
-<span class="sd">            &quot;fisheye&quot;, and &quot;ftheta&quot;. Default is &quot;pinhole&quot;.</span>
+<span class="sd">        camera_model: The camera model to use. Supported models are "pinhole", "ortho",</span>
+<span class="sd">            "fisheye", and "ftheta". Default is "pinhole".</span>
 <span class="sd">        segmented: Whether to use segmented radix sort. Default is False.</span>
 <span class="sd">            Segmented radix sort performs sorting in segments, which is more efficient for the sorting operation itself.</span>
 <span class="sd">            However, since it requires offset indices as input, additional global memory access is needed, which results</span>
@@ -780,8 +780,14 @@
 <span class="sd">            with_eval3d=True. Default is False.</span>
 <span class="sd">        global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for</span>
 <span class="sd">            sorting Gaussians during rasterization. When True, Gaussians are sorted by their</span>
-<span class="sd">            z-coordinate in camera space. When False, they are sorted by their Euclidean</span>
-<span class="sd">            distance from the camera origin. Default is True.</span>
+<span class="sd">            z-coordinate in camera space. When False, they are sorted by their Euclidean distance</span>
+<span class="sd">            from the camera origin. The UT projection kernel then uses Euclidean near/far culling</span>
+<span class="sd">            only for LiDAR and FTheta; forward-only camera models continue to use camera-space z</span>
+<span class="sd">            culling. A wide-FOV FTheta calibration therefore requires ``global_z_order=False`` to</span>
+<span class="sd">            render its beyond-180-degree band. The same setting also makes the D/ED depth channel</span>
+<span class="sd">            use Euclidean distance. An FTheta ``max_angle`` must come from calibration and must not</span>
+<span class="sd">            be raised merely to widen rendered FOV: its forward polynomial is trusted only over</span>
+<span class="sd">            ``[0, max_angle]``. Default is True.</span>
 <span class="sd">        radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.</span>
 <span class="sd">            For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape</span>
 <span class="sd">            should be [..., C, 4].</span>
@@ -803,9 +809,9 @@
 <span class="sd">        A tuple:</span>
 
 <span class="sd">        **render_colors**: The rendered colors. [..., C, height, width, X].</span>
-<span class="sd">        X depends on the `render_mode` and input `colors`. If `render_mode` is &quot;RGB&quot;,</span>
-<span class="sd">        X is D; if `render_mode` is &quot;D&quot; or &quot;ED&quot;, X is 1; if `render_mode` is &quot;RGB+D&quot; or</span>
-<span class="sd">        &quot;RGB+ED&quot;, X is D+1.</span>
+<span class="sd">        X depends on the `render_mode` and input `colors`. If `render_mode` is "RGB",</span>
+<span class="sd">        X is D; if `render_mode` is "D" or "ED", X is 1; if `render_mode` is "RGB+D" or</span>
+<span class="sd">        "RGB+ED", X is D+1.</span>
 
 <span class="sd">        **render_alphas**: The rendered alphas. [..., C, height, width, 1].</span>
 
@@ -833,11 +839,11 @@
 <span class="sd">        &gt;&gt;&gt; print (colors.shape, alphas.shape)</span>
 <span class="sd">        torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])</span>
 <span class="sd">        &gt;&gt;&gt; print (meta.keys())</span>
-<span class="sd">        dict_keys([&#39;camera_ids&#39;, &#39;gaussian_ids&#39;, &#39;radii&#39;, &#39;means2d&#39;, &#39;depths&#39;, &#39;conics&#39;,</span>
-<span class="sd">        &#39;opacities&#39;, &#39;tile_width&#39;, &#39;tile_height&#39;, &#39;tiles_per_gauss&#39;, &#39;isect_ids&#39;,</span>
-<span class="sd">        &#39;flatten_ids&#39;, &#39;isect_offsets&#39;, &#39;width&#39;, &#39;height&#39;, &#39;tile_size&#39;])</span>
+<span class="sd">        dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'conics',</span>
+<span class="sd">        'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',</span>
+<span class="sd">        'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size'])</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">has_color</span> <span class="o">=</span> <span class="n">render_mode_has_color</span><span class="p">(</span><span class="n">render_mode</span><span class="p">)</span>
 
     <span class="n">external_distortion_coeffs</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span>
@@ -865,8 +871,8 @@
     <span class="n">_validate_renderer_config</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">with_eval3d</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_MixedBatch</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> requires with_eval3d=True; &quot;</span>
-            <span class="s2">&quot;the non-eval3d path only supports RendererConfig_MixedBatch.&quot;</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> requires with_eval3d=True; "</span>
+            <span class="s2">"the non-eval3d path only supports RendererConfig_MixedBatch."</span>
         <span class="p">)</span>
     <span class="n">renderer_config_impl</span> <span class="o">=</span> <span class="n">_renderer_config_type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span>
 
@@ -883,7 +889,7 @@
         <span class="n">process_group_name</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="n">world_size</span> <span class="o">=</span> <span class="mi">1</span>
 
-    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">"CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="n">sh_degree_value</span> <span class="o">=</span> <span class="n">sh_degree</span> <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="o">-</span><span class="mi">1</span>
     <span class="n">extra_signals_sh_degree_value</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">extra_signals_sh_degree</span> <span class="k">if</span> <span class="n">extra_signals_sh_degree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="o">-</span><span class="mi">1</span>
@@ -913,7 +919,7 @@
         <span class="n">isect_offsets</span><span class="p">,</span>
         <span class="n">tile_width</span><span class="p">,</span>
         <span class="n">tile_height</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterization_3dgs&quot;</span><span class="p">)(</span>
+    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterization_3dgs"</span><span class="p">)(</span>
         <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">covars</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">quats</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
@@ -933,8 +939,8 @@
         <span class="n">packed</span><span class="p">,</span>
         <span class="n">sparse_grad</span><span class="p">,</span>
         <span class="n">absgrad</span><span class="p">,</span>
-        <span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">,</span>
-        <span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
+        <span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">"antialiased"</span><span class="p">,</span>
+        <span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">"classic"</span><span class="p">,</span>
         <span class="n">camera_model_type</span><span class="p">,</span>
         <span class="n">segmented</span><span class="p">,</span>
         <span class="n">channel_chunk</span><span class="p">,</span>
@@ -976,31 +982,31 @@
     <span class="n">B</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
     <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">3</span><span class="p">]</span>
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;batch_ids&quot;</span><span class="p">:</span> <span class="n">batch_ids</span><span class="p">,</span>
-        <span class="s2">&quot;camera_ids&quot;</span><span class="p">:</span> <span class="n">camera_ids</span><span class="p">,</span>
-        <span class="s2">&quot;gaussian_ids&quot;</span><span class="p">:</span> <span class="n">gaussian_ids</span><span class="p">,</span>
-        <span class="s2">&quot;radii&quot;</span><span class="p">:</span> <span class="n">radii</span><span class="p">,</span>
-        <span class="s2">&quot;means2d&quot;</span><span class="p">:</span> <span class="n">means2d</span><span class="p">,</span>
-        <span class="s2">&quot;depths&quot;</span><span class="p">:</span> <span class="n">depths</span><span class="p">,</span>
-        <span class="s2">&quot;conics&quot;</span><span class="p">:</span> <span class="n">conics</span><span class="p">,</span>
-        <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">projected_opacities</span><span class="p">,</span>
-        <span class="s2">&quot;tile_width&quot;</span><span class="p">:</span> <span class="n">tile_width</span><span class="p">,</span>
-        <span class="s2">&quot;tile_height&quot;</span><span class="p">:</span> <span class="n">tile_height</span><span class="p">,</span>
-        <span class="s2">&quot;tiles_per_gauss&quot;</span><span class="p">:</span> <span class="n">tiles_per_gauss</span><span class="p">,</span>
-        <span class="s2">&quot;isect_ids&quot;</span><span class="p">:</span> <span class="n">isect_ids</span><span class="p">,</span>
-        <span class="s2">&quot;flatten_ids&quot;</span><span class="p">:</span> <span class="n">flatten_ids</span><span class="p">,</span>
-        <span class="s2">&quot;isect_offsets&quot;</span><span class="p">:</span> <span class="n">isect_offsets</span><span class="p">,</span>
-        <span class="s2">&quot;width&quot;</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
-        <span class="s2">&quot;height&quot;</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
-        <span class="s2">&quot;tile_size&quot;</span><span class="p">:</span> <span class="n">tile_size</span><span class="p">,</span>
-        <span class="s2">&quot;n_batches&quot;</span><span class="p">:</span> <span class="n">B</span><span class="p">,</span>
-        <span class="s2">&quot;n_cameras&quot;</span><span class="p">:</span> <span class="n">C</span><span class="p">,</span>
+        <span class="s2">"batch_ids"</span><span class="p">:</span> <span class="n">batch_ids</span><span class="p">,</span>
+        <span class="s2">"camera_ids"</span><span class="p">:</span> <span class="n">camera_ids</span><span class="p">,</span>
+        <span class="s2">"gaussian_ids"</span><span class="p">:</span> <span class="n">gaussian_ids</span><span class="p">,</span>
+        <span class="s2">"radii"</span><span class="p">:</span> <span class="n">radii</span><span class="p">,</span>
+        <span class="s2">"means2d"</span><span class="p">:</span> <span class="n">means2d</span><span class="p">,</span>
+        <span class="s2">"depths"</span><span class="p">:</span> <span class="n">depths</span><span class="p">,</span>
+        <span class="s2">"conics"</span><span class="p">:</span> <span class="n">conics</span><span class="p">,</span>
+        <span class="s2">"opacities"</span><span class="p">:</span> <span class="n">projected_opacities</span><span class="p">,</span>
+        <span class="s2">"tile_width"</span><span class="p">:</span> <span class="n">tile_width</span><span class="p">,</span>
+        <span class="s2">"tile_height"</span><span class="p">:</span> <span class="n">tile_height</span><span class="p">,</span>
+        <span class="s2">"tiles_per_gauss"</span><span class="p">:</span> <span class="n">tiles_per_gauss</span><span class="p">,</span>
+        <span class="s2">"isect_ids"</span><span class="p">:</span> <span class="n">isect_ids</span><span class="p">,</span>
+        <span class="s2">"flatten_ids"</span><span class="p">:</span> <span class="n">flatten_ids</span><span class="p">,</span>
+        <span class="s2">"isect_offsets"</span><span class="p">:</span> <span class="n">isect_offsets</span><span class="p">,</span>
+        <span class="s2">"width"</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
+        <span class="s2">"height"</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
+        <span class="s2">"tile_size"</span><span class="p">:</span> <span class="n">tile_size</span><span class="p">,</span>
+        <span class="s2">"n_batches"</span><span class="p">:</span> <span class="n">B</span><span class="p">,</span>
+        <span class="s2">"n_cameras"</span><span class="p">:</span> <span class="n">C</span><span class="p">,</span>
     <span class="p">}</span>
 
     <span class="k">if</span> <span class="n">extra_signals</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;render_extra_signals&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_extra_signals</span>
+        <span class="n">meta</span><span class="p">[</span><span class="s2">"render_extra_signals"</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_extra_signals</span>
     <span class="k">if</span> <span class="n">return_normals</span><span class="p">:</span>
-        <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;normals&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_normals</span>
+        <span class="n">meta</span><span class="p">[</span><span class="s2">"normals"</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_normals</span>
 
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">meta</span></div>
 
@@ -1028,7 +1034,7 @@
             <span class="n">sh_degree</span><span class="p">,</span> <span class="n">means</span><span class="p">,</span> <span class="n">viewmats</span><span class="p">,</span> <span class="n">features</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="n">masks</span>
         <span class="p">)</span>  <span class="c1"># [..., C, N, D]</span>
         <span class="k">if</span> <span class="n">clamp</span><span class="p">:</span>
-            <span class="c1"># make it apple-to-apple with Inria&#39;s CUDA Backend.</span>
+            <span class="c1"># make it apple-to-apple with Inria's CUDA Backend.</span>
             <span class="n">features</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="n">features</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">features</span> <span class="o">=</span> <span class="n">features</span> <span class="o">+</span> <span class="mf">0.5</span>
@@ -1054,24 +1060,24 @@
         <span class="n">Tensor</span>
     <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 6] -&gt; ox, oy, oz, dx*spread, dy*spread, dz*spread</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
-    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
+    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">"RGB"</span><span class="p">,</span>
+    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="s2">"classic"</span><span class="p">,</span>
     <span class="n">channel_chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span>
     <span class="n">batch_per_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
     <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">with_ut</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">"pinhole"</span><span class="p">,</span>
     <span class="n">lidar_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">RowOffsetStructuredSpinningLidarModelParametersExt</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">extra_signals</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
         <span class="n">Tensor</span>
     <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, E], or [N, K, E] when extra_signals_sh_degree set</span>
     <span class="n">extra_signals_sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;A version of rasterization() that utilies on PyTorch&#39;s autograd.</span>
+<span class="w">    </span><span class="sd">"""A version of rasterization() that utilies on PyTorch's autograd.</span>
 
 <span class="sd">    .. note::</span>
-<span class="sd">        This function still relies on gsplat&#39;s CUDA backend for some computation, but the</span>
-<span class="sd">        entire differentiable graph is on of PyTorch (and nerfacc) so could use Pytorch&#39;s</span>
+<span class="sd">        This function still relies on gsplat's CUDA backend for some computation, but the</span>
+<span class="sd">        entire differentiable graph is on of PyTorch (and nerfacc) so could use Pytorch's</span>
 <span class="sd">        autograd for backpropagation.</span>
 
 <span class="sd">    .. note::</span>
@@ -1081,7 +1087,7 @@
 <span class="sd">    .. note::</span>
 <span class="sd">        Compared to rasterization(), this function does not support some arguments such as</span>
 <span class="sd">        `packed`, `sparse_grad` and `absgrad`.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.cuda._torch_impl</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
         <span class="n">_fully_fused_projection</span><span class="p">,</span>
         <span class="n">_rasterize_to_pixels</span><span class="p">,</span>
@@ -1151,14 +1157,14 @@
             <span class="n">eps2d</span><span class="o">=</span><span class="n">eps2d</span><span class="p">,</span>
             <span class="n">near_plane</span><span class="o">=</span><span class="n">near_plane</span><span class="p">,</span>
             <span class="n">far_plane</span><span class="o">=</span><span class="n">far_plane</span><span class="p">,</span>
-            <span class="n">calc_compensations</span><span class="o">=</span><span class="p">(</span><span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">),</span>
+            <span class="n">calc_compensations</span><span class="o">=</span><span class="p">(</span><span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">"antialiased"</span><span class="p">),</span>
             <span class="n">camera_model</span><span class="o">=</span><span class="n">camera_model</span><span class="p">,</span>
             <span class="n">lidar_coeffs</span><span class="o">=</span><span class="n">lidar_coeffs</span><span class="p">,</span>
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Rays input is only supported with with_eval3d=True&quot;</span><span class="p">)</span>
-        <span class="k">assert</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="n">camera_model</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Rays input is only supported with with_eval3d=True"</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">"pinhole"</span><span class="p">,</span> <span class="n">camera_model</span>
 
         <span class="c1"># Project Gaussians to 2D.</span>
         <span class="c1"># The results are with shape [..., C, N, ...]. Only the elements with radii &gt; 0 are valid.</span>
@@ -1173,7 +1179,7 @@
             <span class="n">eps2d</span><span class="o">=</span><span class="n">eps2d</span><span class="p">,</span>
             <span class="n">near_plane</span><span class="o">=</span><span class="n">near_plane</span><span class="p">,</span>
             <span class="n">far_plane</span><span class="o">=</span><span class="n">far_plane</span><span class="p">,</span>
-            <span class="n">calc_compensations</span><span class="o">=</span><span class="p">(</span><span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">),</span>
+            <span class="n">calc_compensations</span><span class="o">=</span><span class="p">(</span><span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">"antialiased"</span><span class="p">),</span>
         <span class="p">)</span>
     <span class="n">opacities</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span>
         <span class="n">opacities</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
@@ -1219,7 +1225,7 @@
     <span class="n">isect_offsets</span> <span class="o">=</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">))</span>
 
     <span class="c1"># Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()</span>
-    <span class="c1"># Make sure they&#39;re clamped if evaluating SH.</span>
+    <span class="c1"># Make sure they're clamped if evaluating SH.</span>
     <span class="k">if</span> <span class="n">has_color</span><span class="p">:</span>
         <span class="n">colors</span> <span class="o">=</span> <span class="n">_maybe_evaluate_sh</span><span class="p">(</span>
             <span class="n">sh_degree</span><span class="p">,</span> <span class="n">colors</span><span class="p">,</span> <span class="n">means</span><span class="p">,</span> <span class="n">radii</span><span class="p">,</span> <span class="n">viewmats</span><span class="p">,</span> <span class="n">batch_dims</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="kc">True</span>
@@ -1310,9 +1316,9 @@
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                        <span class="s2">&quot;Rays input is only supported with with_eval3d=True&quot;</span>
+                        <span class="s2">"Rays input is only supported with with_eval3d=True"</span>
                     <span class="p">)</span>
-                <span class="k">assert</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="n">camera_model</span>
+                <span class="k">assert</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">"pinhole"</span><span class="p">,</span> <span class="n">camera_model</span>
                 <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">_rasterize_to_pixels</span><span class="p">(</span>
                     <span class="n">means2d</span><span class="p">,</span>
                     <span class="n">conics</span><span class="p">,</span>
@@ -1355,8 +1361,8 @@
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Rays input is only supported with with_eval3d=True&quot;</span><span class="p">)</span>
-            <span class="k">assert</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="n">camera_model</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Rays input is only supported with with_eval3d=True"</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">"pinhole"</span><span class="p">,</span> <span class="n">camera_model</span>
             <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">_rasterize_to_pixels</span><span class="p">(</span>
                 <span class="n">means2d</span><span class="p">,</span>
                 <span class="n">conics</span><span class="p">,</span>
@@ -1395,29 +1401,29 @@
             <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="n">D</span><span class="p">],</span> <span class="n">render_depth</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
 
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;batch_ids&quot;</span><span class="p">:</span> <span class="n">batch_ids</span><span class="p">,</span>
-        <span class="s2">&quot;camera_ids&quot;</span><span class="p">:</span> <span class="n">camera_ids</span><span class="p">,</span>
-        <span class="s2">&quot;gaussian_ids&quot;</span><span class="p">:</span> <span class="n">gaussian_ids</span><span class="p">,</span>
-        <span class="s2">&quot;radii&quot;</span><span class="p">:</span> <span class="n">radii</span><span class="p">,</span>
-        <span class="s2">&quot;means2d&quot;</span><span class="p">:</span> <span class="n">means2d</span><span class="p">,</span>
-        <span class="s2">&quot;depths&quot;</span><span class="p">:</span> <span class="n">depths</span><span class="p">,</span>
-        <span class="s2">&quot;conics&quot;</span><span class="p">:</span> <span class="n">conics</span><span class="p">,</span>
-        <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">opacities</span><span class="p">,</span>
-        <span class="s2">&quot;tile_width&quot;</span><span class="p">:</span> <span class="n">tile_width</span><span class="p">,</span>
-        <span class="s2">&quot;tile_height&quot;</span><span class="p">:</span> <span class="n">tile_height</span><span class="p">,</span>
-        <span class="s2">&quot;tiles_per_gauss&quot;</span><span class="p">:</span> <span class="n">tiles_per_gauss</span><span class="p">,</span>
-        <span class="s2">&quot;isect_ids&quot;</span><span class="p">:</span> <span class="n">isect_ids</span><span class="p">,</span>
-        <span class="s2">&quot;flatten_ids&quot;</span><span class="p">:</span> <span class="n">flatten_ids</span><span class="p">,</span>
-        <span class="s2">&quot;isect_offsets&quot;</span><span class="p">:</span> <span class="n">isect_offsets</span><span class="p">,</span>
-        <span class="s2">&quot;width&quot;</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
-        <span class="s2">&quot;height&quot;</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
-        <span class="s2">&quot;tile_size&quot;</span><span class="p">:</span> <span class="n">tile_size</span><span class="p">,</span>
-        <span class="s2">&quot;n_batches&quot;</span><span class="p">:</span> <span class="n">B</span><span class="p">,</span>
-        <span class="s2">&quot;n_cameras&quot;</span><span class="p">:</span> <span class="n">C</span><span class="p">,</span>
+        <span class="s2">"batch_ids"</span><span class="p">:</span> <span class="n">batch_ids</span><span class="p">,</span>
+        <span class="s2">"camera_ids"</span><span class="p">:</span> <span class="n">camera_ids</span><span class="p">,</span>
+        <span class="s2">"gaussian_ids"</span><span class="p">:</span> <span class="n">gaussian_ids</span><span class="p">,</span>
+        <span class="s2">"radii"</span><span class="p">:</span> <span class="n">radii</span><span class="p">,</span>
+        <span class="s2">"means2d"</span><span class="p">:</span> <span class="n">means2d</span><span class="p">,</span>
+        <span class="s2">"depths"</span><span class="p">:</span> <span class="n">depths</span><span class="p">,</span>
+        <span class="s2">"conics"</span><span class="p">:</span> <span class="n">conics</span><span class="p">,</span>
+        <span class="s2">"opacities"</span><span class="p">:</span> <span class="n">opacities</span><span class="p">,</span>
+        <span class="s2">"tile_width"</span><span class="p">:</span> <span class="n">tile_width</span><span class="p">,</span>
+        <span class="s2">"tile_height"</span><span class="p">:</span> <span class="n">tile_height</span><span class="p">,</span>
+        <span class="s2">"tiles_per_gauss"</span><span class="p">:</span> <span class="n">tiles_per_gauss</span><span class="p">,</span>
+        <span class="s2">"isect_ids"</span><span class="p">:</span> <span class="n">isect_ids</span><span class="p">,</span>
+        <span class="s2">"flatten_ids"</span><span class="p">:</span> <span class="n">flatten_ids</span><span class="p">,</span>
+        <span class="s2">"isect_offsets"</span><span class="p">:</span> <span class="n">isect_offsets</span><span class="p">,</span>
+        <span class="s2">"width"</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
+        <span class="s2">"height"</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
+        <span class="s2">"tile_size"</span><span class="p">:</span> <span class="n">tile_size</span><span class="p">,</span>
+        <span class="s2">"n_batches"</span><span class="p">:</span> <span class="n">B</span><span class="p">,</span>
+        <span class="s2">"n_cameras"</span><span class="p">:</span> <span class="n">C</span><span class="p">,</span>
     <span class="p">}</span>
 
     <span class="k">if</span> <span class="n">render_extra_signals</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;render_extra_signals&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_extra_signals</span>
+        <span class="n">meta</span><span class="p">[</span><span class="s2">"render_extra_signals"</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_extra_signals</span>
 
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">meta</span>
 
@@ -1439,20 +1445,20 @@
 <span class="c1">#     backgrounds: Optional[Tensor] = None,</span>
 <span class="c1">#     **kwargs,</span>
 <span class="c1"># ) -&gt; Tuple[Tensor, Tensor, Dict]:</span>
-<span class="c1">#     &quot;&quot;&quot;Wrapper for old version gsplat.</span>
+<span class="c1">#     """Wrapper for old version gsplat.</span>
 
 <span class="c1">#     .. warning::</span>
 <span class="c1">#         This function exists for comparison purpose only. So we skip collecting</span>
 <span class="c1">#         the intermidiate variables, and only return an empty dict.</span>
 
-<span class="c1">#     &quot;&quot;&quot;</span>
+<span class="c1">#     """</span>
 <span class="c1">#     from gsplat.cuda_legacy._wrapper import (</span>
 <span class="c1">#         project_gaussians,</span>
 <span class="c1">#         rasterize_gaussians,</span>
 <span class="c1">#         spherical_harmonics,</span>
 <span class="c1">#     )</span>
 
-<span class="c1">#     assert eps2d == 0.3, &quot;This is hard-coded in CUDA to be 0.3&quot;</span>
+<span class="c1">#     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"</span>
 <span class="c1">#     C = len(viewmats)</span>
 
 <span class="c1">#     render_colors, render_alphas = [], []</span>
@@ -1531,24 +1537,24 @@
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Wrapper for Inria&#39;s rasterization backend.</span>
+<span class="w">    </span><span class="sd">"""Wrapper for Inria's rasterization backend.</span>
 
 <span class="sd">    .. warning::</span>
 <span class="sd">        This function exists for comparison purpose only. Only rendered image is</span>
 <span class="sd">        returned.</span>
 
 <span class="sd">    .. warning::</span>
-<span class="sd">        Inria&#39;s CUDA backend has its own LICENSE, so this function should be used with</span>
+<span class="sd">        Inria's CUDA backend has its own LICENSE, so this function should be used with</span>
 <span class="sd">        the respect to the original LICENSE at:</span>
 <span class="sd">        https://github.com/graphdeco-inria/diff-gaussian-rasterization</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">diff_gaussian_rasterization</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
         <span class="n">GaussianRasterizationSettings</span><span class="p">,</span>
         <span class="n">GaussianRasterizer</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="k">assert</span> <span class="n">eps2d</span> <span class="o">==</span> <span class="mf">0.3</span><span class="p">,</span> <span class="s2">&quot;This is hard-coded in CUDA to be 0.3&quot;</span>
+    <span class="k">assert</span> <span class="n">eps2d</span> <span class="o">==</span> <span class="mf">0.3</span><span class="p">,</span> <span class="s2">"This is hard-coded in CUDA to be 0.3"</span>
     <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">num_batch_dims</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
     <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
@@ -1694,13 +1700,13 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">"RGB"</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">distloss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">depth_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;expected&quot;</span><span class="p">,</span> <span class="s2">&quot;median&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;expected&quot;</span><span class="p">,</span>
+    <span class="n">depth_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"expected"</span><span class="p">,</span> <span class="s2">"median"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"expected"</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).</span>
+<span class="w">    </span><span class="sd">"""Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).</span>
 
 <span class="sd">    This function supports a handful of features, similar to the :func:`rasterization` function.</span>
 
@@ -1709,7 +1715,7 @@
 
 <span class="sd">    Args:</span>
 <span class="sd">        means: The 3D centers of the Gaussians. [..., N, 3]</span>
-<span class="sd">        quats: The quaternions of the Gaussians (wxyz convension). It&#39;s not required to be normalized. [..., N, 4]</span>
+<span class="sd">        quats: The quaternions of the Gaussians (wxyz convension). It's not required to be normalized. [..., N, 4]</span>
 <span class="sd">        scales: The scales of the Gaussians. [..., N, 3]</span>
 <span class="sd">        opacities: The opacities of the Gaussians. [..., N]</span>
 <span class="sd">        colors: The colors of the Gaussians. [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients (shared across batch/camera dims).</span>
@@ -1734,15 +1740,15 @@
 <span class="sd">        tile_size: The size of the tiles for rasterization. Default is 16.</span>
 <span class="sd">            (Note: other values are not tested)</span>
 <span class="sd">        backgrounds: The background colors. [C, D]. Default is None.</span>
-<span class="sd">        render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;Ed&quot;, &quot;D&quot;, &quot;ED&quot;,</span>
-<span class="sd">            &quot;RGB+D&quot;, and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image.</span>
+<span class="sd">        render_mode: The rendering mode. Supported modes are "RGB", "Ed", "D", "ED",</span>
+<span class="sd">            "RGB+D", and "RGB+ED". "RGB" renders the colored image.</span>
 <span class="sd">            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth.</span>
-<span class="sd">            Expected modes (Ed, ED) are normalized by opacity. Default is &quot;RGB&quot;.</span>
+<span class="sd">            Expected modes (Ed, ED) are normalized by opacity. Default is "RGB".</span>
 <span class="sd">        sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in</span>
 <span class="sd">            a COO sparse layout. This can be helpful for saving memory. Default is False.</span>
 <span class="sd">        absgrad: If true, the absolute gradients of the projected 2D means</span>
 <span class="sd">            will be computed during the backward pass, which could be accessed by</span>
-<span class="sd">            `meta[&quot;means2d&quot;].absgrad`. Default is False.</span>
+<span class="sd">            `meta["means2d"].absgrad`. Default is False.</span>
 <span class="sd">        channel_chunk: The number of channels to render in one go. Default is 32.</span>
 <span class="sd">            If the required rendering channels are larger than this value, the rendering</span>
 <span class="sd">            will be done looply in chunks.</span>
@@ -1753,9 +1759,9 @@
 <span class="sd">        A tuple:</span>
 
 <span class="sd">        **render_colors**: The rendered colors. [..., C, height, width, X].</span>
-<span class="sd">        X depends on the `render_mode` and input `colors`. If `render_mode` is &quot;RGB&quot;,</span>
-<span class="sd">        X is D; if `render_mode` is &quot;D&quot; or &quot;ED&quot;, X is 1; if `render_mode` is &quot;RGB+D&quot; or</span>
-<span class="sd">        &quot;RGB+ED&quot;, X is D+1.</span>
+<span class="sd">        X depends on the `render_mode` and input `colors`. If `render_mode` is "RGB",</span>
+<span class="sd">        X is D; if `render_mode` is "D" or "ED", X is 1; if `render_mode` is "RGB+D" or</span>
+<span class="sd">        "RGB+ED", X is D+1.</span>
 
 <span class="sd">        **render_alphas**: The rendered alphas. [..., C, height, width, 1].</span>
 
@@ -1796,12 +1802,12 @@
 <span class="sd">        &gt;&gt;&gt; print (distort.shape, median_depth.shape)</span>
 <span class="sd">        torch.Size([1, 200, 300, 1]) torch.Size([1, 200, 300, 1])</span>
 <span class="sd">        &gt;&gt;&gt; print (meta.keys())</span>
-<span class="sd">        dict_keys([&#39;camera_ids&#39;, &#39;gaussian_ids&#39;, &#39;radii&#39;, &#39;means2d&#39;, &#39;depths&#39;, &#39;ray_transforms&#39;,</span>
-<span class="sd">        &#39;opacities&#39;, &#39;normals&#39;, &#39;tile_width&#39;, &#39;tile_height&#39;, &#39;tiles_per_gauss&#39;, &#39;isect_ids&#39;,</span>
-<span class="sd">        &#39;flatten_ids&#39;, &#39;isect_offsets&#39;, &#39;width&#39;, &#39;height&#39;, &#39;tile_size&#39;, &#39;n_cameras&#39;, &#39;render_distort&#39;,</span>
-<span class="sd">        &#39;gradient_2dgs&#39;])</span>
+<span class="sd">        dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'ray_transforms',</span>
+<span class="sd">        'opacities', 'normals', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',</span>
+<span class="sd">        'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size', 'n_cameras', 'render_distort',</span>
+<span class="sd">        'gradient_2dgs'])</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="p">(</span>
         <span class="n">render_colors</span><span class="p">,</span>
@@ -1827,7 +1833,7 @@
         <span class="n">tile_width</span><span class="p">,</span>
         <span class="n">tile_height</span><span class="p">,</span>
         <span class="n">n_cameras</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterization_2dgs&quot;</span><span class="p">)(</span>
+    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterization_2dgs"</span><span class="p">)(</span>
         <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">scales</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1856,26 +1862,26 @@
         <span class="n">means2d</span><span class="o">.</span><span class="n">absgrad</span> <span class="o">=</span> <span class="n">means2d_absgrad</span>
 
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;camera_ids&quot;</span><span class="p">:</span> <span class="n">camera_ids</span><span class="p">,</span>
-        <span class="s2">&quot;gaussian_ids&quot;</span><span class="p">:</span> <span class="n">gaussian_ids</span><span class="p">,</span>
-        <span class="s2">&quot;radii&quot;</span><span class="p">:</span> <span class="n">radii</span><span class="p">,</span>
-        <span class="s2">&quot;means2d&quot;</span><span class="p">:</span> <span class="n">means2d</span><span class="p">,</span>
-        <span class="s2">&quot;depths&quot;</span><span class="p">:</span> <span class="n">depths</span><span class="p">,</span>
-        <span class="s2">&quot;ray_transforms&quot;</span><span class="p">:</span> <span class="n">ray_transforms</span><span class="p">,</span>
-        <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">opacities</span><span class="p">,</span>
-        <span class="s2">&quot;normals&quot;</span><span class="p">:</span> <span class="n">normals</span><span class="p">,</span>
-        <span class="s2">&quot;tile_width&quot;</span><span class="p">:</span> <span class="n">tile_width</span><span class="p">,</span>
-        <span class="s2">&quot;tile_height&quot;</span><span class="p">:</span> <span class="n">tile_height</span><span class="p">,</span>
-        <span class="s2">&quot;tiles_per_gauss&quot;</span><span class="p">:</span> <span class="n">tiles_per_gauss</span><span class="p">,</span>
-        <span class="s2">&quot;isect_ids&quot;</span><span class="p">:</span> <span class="n">isect_ids</span><span class="p">,</span>
-        <span class="s2">&quot;flatten_ids&quot;</span><span class="p">:</span> <span class="n">flatten_ids</span><span class="p">,</span>
-        <span class="s2">&quot;isect_offsets&quot;</span><span class="p">:</span> <span class="n">isect_offsets</span><span class="p">,</span>
-        <span class="s2">&quot;width&quot;</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
-        <span class="s2">&quot;height&quot;</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
-        <span class="s2">&quot;tile_size&quot;</span><span class="p">:</span> <span class="n">tile_size</span><span class="p">,</span>
-        <span class="s2">&quot;n_cameras&quot;</span><span class="p">:</span> <span class="n">n_cameras</span><span class="p">,</span>
-        <span class="s2">&quot;render_distort&quot;</span><span class="p">:</span> <span class="n">render_distort</span><span class="p">,</span>
-        <span class="s2">&quot;gradient_2dgs&quot;</span><span class="p">:</span> <span class="n">densify</span><span class="p">,</span>  <span class="c1"># This holds the gradient used for densification for 2dgs</span>
+        <span class="s2">"camera_ids"</span><span class="p">:</span> <span class="n">camera_ids</span><span class="p">,</span>
+        <span class="s2">"gaussian_ids"</span><span class="p">:</span> <span class="n">gaussian_ids</span><span class="p">,</span>
+        <span class="s2">"radii"</span><span class="p">:</span> <span class="n">radii</span><span class="p">,</span>
+        <span class="s2">"means2d"</span><span class="p">:</span> <span class="n">means2d</span><span class="p">,</span>
+        <span class="s2">"depths"</span><span class="p">:</span> <span class="n">depths</span><span class="p">,</span>
+        <span class="s2">"ray_transforms"</span><span class="p">:</span> <span class="n">ray_transforms</span><span class="p">,</span>
+        <span class="s2">"opacities"</span><span class="p">:</span> <span class="n">opacities</span><span class="p">,</span>
+        <span class="s2">"normals"</span><span class="p">:</span> <span class="n">normals</span><span class="p">,</span>
+        <span class="s2">"tile_width"</span><span class="p">:</span> <span class="n">tile_width</span><span class="p">,</span>
+        <span class="s2">"tile_height"</span><span class="p">:</span> <span class="n">tile_height</span><span class="p">,</span>
+        <span class="s2">"tiles_per_gauss"</span><span class="p">:</span> <span class="n">tiles_per_gauss</span><span class="p">,</span>
+        <span class="s2">"isect_ids"</span><span class="p">:</span> <span class="n">isect_ids</span><span class="p">,</span>
+        <span class="s2">"flatten_ids"</span><span class="p">:</span> <span class="n">flatten_ids</span><span class="p">,</span>
+        <span class="s2">"isect_offsets"</span><span class="p">:</span> <span class="n">isect_offsets</span><span class="p">,</span>
+        <span class="s2">"width"</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
+        <span class="s2">"height"</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
+        <span class="s2">"tile_size"</span><span class="p">:</span> <span class="n">tile_size</span><span class="p">,</span>
+        <span class="s2">"n_cameras"</span><span class="p">:</span> <span class="n">n_cameras</span><span class="p">,</span>
+        <span class="s2">"render_distort"</span><span class="p">:</span> <span class="n">render_distort</span><span class="p">,</span>
+        <span class="s2">"gradient_2dgs"</span><span class="p">:</span> <span class="n">densify</span><span class="p">,</span>  <span class="c1"># This holds the gradient used for densification for 2dgs</span>
     <span class="p">}</span>
 
     <span class="k">return</span> <span class="p">(</span>
@@ -1910,20 +1916,20 @@
     <span class="n">depth_ratio</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
     <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Wrapper for 2DGS&#39;s rasterization backend which is based on Inria&#39;s backend.</span>
+<span class="w">    </span><span class="sd">"""Wrapper for 2DGS's rasterization backend which is based on Inria's backend.</span>
 
 <span class="sd">    Install the 2DGS rasterization backend from</span>
 <span class="sd">        https://github.com/hbb1/diff-surfel-rasterization</span>
 
 <span class="sd">    Credit to Jeffrey Hu https://github.com/jefequien</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">diff_surfel_rasterization</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
         <span class="n">GaussianRasterizationSettings</span><span class="p">,</span>
         <span class="n">GaussianRasterizer</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="k">assert</span> <span class="n">eps2d</span> <span class="o">==</span> <span class="mf">0.3</span><span class="p">,</span> <span class="s2">&quot;This is hard-coded in CUDA to be 0.3&quot;</span>
+    <span class="k">assert</span> <span class="n">eps2d</span> <span class="o">==</span> <span class="mf">0.3</span><span class="p">,</span> <span class="s2">"This is hard-coded in CUDA to be 0.3"</span>
     <span class="n">C</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span>
     <span class="n">device</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">device</span>
     <span class="n">channels</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
@@ -2028,15 +2034,15 @@
     <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">render_colors</span><span class="p">,</span> <span class="n">render_depth</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
 
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;normals_rend&quot;</span><span class="p">:</span> <span class="n">render_normal</span><span class="p">,</span>
-        <span class="s2">&quot;normals_surf&quot;</span><span class="p">:</span> <span class="n">normals_surf</span><span class="p">,</span>
-        <span class="s2">&quot;render_distloss&quot;</span><span class="p">:</span> <span class="n">render_dist</span><span class="p">,</span>
-        <span class="s2">&quot;means2d&quot;</span><span class="p">:</span> <span class="n">means2D</span><span class="p">,</span>
-        <span class="s2">&quot;width&quot;</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
-        <span class="s2">&quot;height&quot;</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
-        <span class="s2">&quot;radii&quot;</span><span class="p">:</span> <span class="n">radii</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
-        <span class="s2">&quot;n_cameras&quot;</span><span class="p">:</span> <span class="n">C</span><span class="p">,</span>
-        <span class="s2">&quot;gaussian_ids&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="s2">"normals_rend"</span><span class="p">:</span> <span class="n">render_normal</span><span class="p">,</span>
+        <span class="s2">"normals_surf"</span><span class="p">:</span> <span class="n">normals_surf</span><span class="p">,</span>
+        <span class="s2">"render_distloss"</span><span class="p">:</span> <span class="n">render_dist</span><span class="p">,</span>
+        <span class="s2">"means2d"</span><span class="p">:</span> <span class="n">means2D</span><span class="p">,</span>
+        <span class="s2">"width"</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
+        <span class="s2">"height"</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
+        <span class="s2">"radii"</span><span class="p">:</span> <span class="n">radii</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
+        <span class="s2">"n_cameras"</span><span class="p">:</span> <span class="n">C</span><span class="p">,</span>
+        <span class="s2">"gaussian_ids"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">}</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">),</span> <span class="n">meta</span></div>
 

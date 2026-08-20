@@ -312,14 +312,14 @@
 <span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
-<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the "License");</span>
 <span class="c1"># you may not use this file except in compliance with the License.</span>
 <span class="c1"># You may obtain a copy of the License at</span>
 <span class="c1">#</span>
 <span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
-<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># distributed under the License is distributed on an "AS IS" BASIS,</span>
 <span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
@@ -344,11 +344,11 @@
     <span class="n">FOV</span> <span class="k">as</span> <span class="n">FOVBase</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="n">ExternalDistortionModelMeta</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;bivariate-windshield&quot;</span><span class="p">]</span>
-<span class="n">CameraModel</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">,</span> <span class="s2">&quot;lidar&quot;</span><span class="p">]</span>
+<span class="n">ExternalDistortionModelMeta</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"bivariate-windshield"</span><span class="p">]</span>
+<span class="n">CameraModel</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"pinhole"</span><span class="p">,</span> <span class="s2">"ortho"</span><span class="p">,</span> <span class="s2">"fisheye"</span><span class="p">,</span> <span class="s2">"ftheta"</span><span class="p">,</span> <span class="s2">"lidar"</span><span class="p">]</span>
 
 <span class="c1"># Autograd for the migrated ops is attached in Python (torch.library.register_autograd)</span>
-<span class="c1"># rather than C++. The C++ module exports only each op&#39;s `&lt;op&gt;_fwd` and `&lt;op&gt;_bwd`; the</span>
+<span class="c1"># rather than C++. The C++ module exports only each op's `&lt;op&gt;_fwd` and `&lt;op&gt;_bwd`; the</span>
 <span class="c1"># backward is wired to the forward op when this module is imported (the call at the end</span>
 <span class="c1"># of the file), so direct torch.ops.gsplat.* callers get autograd too, not only the</span>
 <span class="c1"># Python wrappers.</span>
@@ -373,36 +373,36 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_has_schema</span><span class="p">(</span><span class="n">op_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Whether `gsplat::&lt;op_name&gt;` is registered (it may be compiled out by build flags).&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Whether `gsplat::&lt;op_name&gt;` is registered (it may be compiled out by build flags)."""</span>
     <span class="k">try</span><span class="p">:</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">_C</span><span class="o">.</span><span class="n">_dispatch_find_schema_or_throw</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;gsplat::</span><span class="si">{</span><span class="n">op_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">_C</span><span class="o">.</span><span class="n">_dispatch_find_schema_or_throw</span><span class="p">(</span><span class="sa">f</span><span class="s2">"gsplat::</span><span class="si">{</span><span class="n">op_name</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span> <span class="s2">""</span><span class="p">)</span>
     <span class="k">except</span> <span class="ne">RuntimeError</span><span class="p">:</span>
         <span class="k">return</span> <span class="kc">False</span>
     <span class="k">return</span> <span class="kc">True</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_register_autograd</span><span class="p">(</span><span class="n">register</span><span class="p">:</span> <span class="nb">type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Attach a Python autograd backward to the C++ forward op ``gsplat::&lt;base&gt;``.</span>
+<span class="w">    </span><span class="sd">"""Attach a Python autograd backward to the C++ forward op ``gsplat::&lt;base&gt;``.</span>
 
-<span class="sd">    ``register`` is a per-op class grouping the op&#39;s hooks: its ``base`` op name and</span>
+<span class="sd">    ``register`` is a per-op class grouping the op's hooks: its ``base`` op name and</span>
 <span class="sd">    static ``setup_context`` / ``backward`` methods. Registering autograd on the</span>
 <span class="sd">    forward op makes the op itself differentiable through the dispatcher, so its</span>
 <span class="sd">    backward is recorded whenever it runs under autograd; ``backward`` invokes</span>
 <span class="sd">    ``torch.ops.gsplat.&lt;base&gt;_bwd``. No-op if either op was compiled out.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">base</span> <span class="o">=</span> <span class="n">register</span><span class="o">.</span><span class="n">base</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">_has_schema</span><span class="p">(</span><span class="n">base</span><span class="p">)</span> <span class="ow">and</span> <span class="n">_has_schema</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)):</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">_has_schema</span><span class="p">(</span><span class="n">base</span><span class="p">)</span> <span class="ow">and</span> <span class="n">_has_schema</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span><span class="p">)):</span>
         <span class="k">return</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">library</span><span class="o">.</span><span class="n">register_autograd</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;gsplat::</span><span class="si">{</span><span class="n">base</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">register</span><span class="o">.</span><span class="n">backward</span><span class="p">,</span> <span class="n">setup_context</span><span class="o">=</span><span class="n">register</span><span class="o">.</span><span class="n">setup_context</span>
+        <span class="sa">f</span><span class="s2">"gsplat::</span><span class="si">{</span><span class="n">base</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span> <span class="n">register</span><span class="o">.</span><span class="n">backward</span><span class="p">,</span> <span class="n">setup_context</span><span class="o">=</span><span class="n">register</span><span class="o">.</span><span class="n">setup_context</span>
     <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_ensure_autograd_registrations</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Install the Python autograd backends for the migrated ops, exactly once.</span>
+<span class="w">    </span><span class="sd">"""Install the Python autograd backends for the migrated ops, exactly once.</span>
 
 <span class="sd">    Populated one op at a time as each C++ autograd Function is ported to Python.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">global</span> <span class="n">_AUTOGRAD_REGISTRATIONS_DONE</span>
     <span class="k">if</span> <span class="n">_AUTOGRAD_REGISTRATIONS_DONE</span><span class="p">:</span>
         <span class="k">return</span>
@@ -437,21 +437,21 @@
         <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">classes</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
     <span class="k">except</span> <span class="ne">RuntimeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
         <span class="c1"># Class not registered (e.g. extension built without it or partial load).</span>
-        <span class="k">if</span> <span class="s2">&quot;does not exist&quot;</span> <span class="ow">in</span> <span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;torch::class_&quot;</span> <span class="ow">in</span> <span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">):</span>
+        <span class="k">if</span> <span class="s2">"does not exist"</span> <span class="ow">in</span> <span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">"torch::class_"</span> <span class="ow">in</span> <span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">):</span>
             <span class="k">return</span> <span class="n">_unavailable_cuda_cls</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
         <span class="k">raise</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_unavailable_cuda_cls</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Placeholder class when the CUDA extension is not available.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Placeholder class when the CUDA extension is not available."""</span>
 
     <span class="k">class</span><span class="w"> </span><span class="nc">_UnavailableCudaCls</span><span class="p">:</span>
         <span class="vm">__name__</span> <span class="o">=</span> <span class="n">name</span>
 
         <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-                <span class="s2">&quot;gsplat CUDA extension is not available (not built or failed to load). &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;Cannot instantiate &#39;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39;.&quot;</span>
+                <span class="s2">"gsplat CUDA extension is not available (not built or failed to load). "</span>
+                <span class="sa">f</span><span class="s2">"Cannot instantiate '</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">'."</span>
             <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">_UnavailableCudaCls</span>
@@ -463,23 +463,23 @@
 
     <span class="k">if</span> <span class="n">_C</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-            <span class="s2">&quot;gsplat CUDA extension is not available (not built or failed to load). &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;Cannot access &#39;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39;.&quot;</span>
+            <span class="s2">"gsplat CUDA extension is not available (not built or failed to load). "</span>
+            <span class="sa">f</span><span class="s2">"Cannot access '</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">'."</span>
         <span class="p">)</span>
     <span class="n">obj</span> <span class="o">=</span> <span class="n">_C</span>
-    <span class="k">for</span> <span class="n">name_split</span> <span class="ow">in</span> <span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">name_split</span> <span class="ow">in</span> <span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">):</span>
         <span class="n">obj</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">name_split</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">obj</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">renderer_config_mixed_batch</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the CUDA enum value for the MixedBatch renderer config.&quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">&quot;RendererConfig.MIXED_BATCH&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="sd">"""Return the CUDA enum value for the MixedBatch renderer config."""</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">"RendererConfig.MIXED_BATCH"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">renderer_config_parallel_batch</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the CUDA enum value for the ParallelBatch renderer config.&quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">&quot;RendererConfig.PARALLEL_BATCH&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="sd">"""Return the CUDA enum value for the ParallelBatch renderer config."""</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">"RendererConfig.PARALLEL_BATCH"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_renderer_config_to_cuda</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
@@ -514,19 +514,19 @@
     <span class="n">ANGLE_TO_PIXELDIST</span> <span class="o">=</span> <span class="mi">1</span>
 
 
-<span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span><span class="s2">&quot;UnscentedTransformParameters&quot;</span><span class="p">)</span>
+<span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span><span class="s2">"UnscentedTransformParameters"</span><span class="p">)</span>
 <span class="n">FThetaCameraDistortionParameters</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span>
-    <span class="s2">&quot;FThetaCameraDistortionParameters&quot;</span>
+    <span class="s2">"FThetaCameraDistortionParameters"</span>
 <span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ExternalDistortionModelParameters</span><span class="p">(</span><span class="n">ABC</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Base class for external distortion model parameters.</span>
+<span class="w">    </span><span class="sd">"""Base class for external distortion model parameters.</span>
 
 <span class="sd">    All concrete external distortion models (e.g. BivariateWindshieldModelParameters)</span>
 <span class="sd">    should inherit from this class so that the rendering API can accept any</span>
 <span class="sd">    distortion model through a single type-erased parameter.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ExternalDistortionReferencePolynomial</span><span class="p">(</span><span class="n">IntEnum</span><span class="p">):</span>
@@ -535,13 +535,13 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">BivariateWindshieldModelParameters</span><span class="p">(</span><span class="n">ExternalDistortionModelParameters</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Thin wrapper around the CUDA BivariateWindshieldModelParameters class.</span>
+<span class="w">    </span><span class="sd">"""Thin wrapper around the CUDA BivariateWindshieldModelParameters class.</span>
 
 <span class="sd">    torch::Library bindings does not allow standalone constants. This</span>
 <span class="sd">    wrapper fetches MAX_ORDER and MAX_COEFFS from the C++ static getters</span>
 <span class="sd">    and exposes them as class-level attributes, preserving the existing</span>
 <span class="sd">    attribute-access calling convention.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">_cuda_cls</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">MAX_ORDER</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span>  <span class="c1"># default, overriden by C++ value</span>
@@ -550,7 +550,7 @@
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_ensure_cuda_cls</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
         <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_cuda_cls</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="bp">cls</span><span class="o">.</span><span class="n">_cuda_cls</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span><span class="s2">&quot;BivariateWindshieldModelParameters&quot;</span><span class="p">)</span>
+            <span class="bp">cls</span><span class="o">.</span><span class="n">_cuda_cls</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span><span class="s2">"BivariateWindshieldModelParameters"</span><span class="p">)</span>
             <span class="bp">cls</span><span class="o">.</span><span class="n">MAX_ORDER</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_cuda_cls</span><span class="o">.</span><span class="n">get_max_order</span><span class="p">()</span>
             <span class="bp">cls</span><span class="o">.</span><span class="n">MAX_COEFFS</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_cuda_cls</span><span class="o">.</span><span class="n">get_max_coeffs</span><span class="p">()</span>
 
@@ -578,31 +578,31 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_camera_wrappers</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;camera_wrappers&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">"camera_wrappers"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_2dgs</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;2dgs&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">"2dgs"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_3dgs</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;3dgs&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">"3dgs"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_3dgut</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;3dgut&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">"3dgut"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_adam</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;adam&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">"adam"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_reloc</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;reloc&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">"reloc"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_losses</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;losses&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">"losses"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">create_camera_model</span><span class="p">(</span>
@@ -617,23 +617,23 @@
     <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">external_distortion_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BivariateWindshieldModelParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">rs_type</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
-    <span class="n">lidar_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;RowOffsetStructuredSpinningLidarModelParametersExt&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">lidar_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">"RowOffsetStructuredSpinningLidarModelParametersExt"</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">):</span>
-    <span class="k">if</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;lidar&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">"lidar"</span><span class="p">:</span>
         <span class="k">assert</span> <span class="p">(</span>
             <span class="n">lidar_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-        <span class="p">),</span> <span class="s2">&quot;lidar_coeffs is required for lidar camera model&quot;</span>
+        <span class="p">),</span> <span class="s2">"lidar_coeffs is required for lidar camera model"</span>
         <span class="n">RowOffsetStructuredSpinningLidarModelCUDA</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span>
-            <span class="s2">&quot;RowOffsetStructuredSpinningLidarModel&quot;</span>
+            <span class="s2">"RowOffsetStructuredSpinningLidarModel"</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="n">RowOffsetStructuredSpinningLidarModelCUDA</span><span class="p">(</span><span class="n">lidar_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">())</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">assert</span> <span class="n">width</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;width is required for non-lidar camera models&quot;</span>
-        <span class="k">assert</span> <span class="n">height</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;height is required for non-lidar camera models&quot;</span>
+        <span class="k">assert</span> <span class="n">width</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">"width is required for non-lidar camera models"</span>
+        <span class="k">assert</span> <span class="n">height</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">"height is required for non-lidar camera models"</span>
         <span class="k">assert</span> <span class="p">(</span>
             <span class="n">principal_points</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-        <span class="p">),</span> <span class="s2">&quot;principal_points is required for non-lidar camera models&quot;</span>
-        <span class="n">BaseCameraModelCUDA</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span><span class="s2">&quot;BaseCameraModel&quot;</span><span class="p">)</span>
+        <span class="p">),</span> <span class="s2">"principal_points is required for non-lidar camera models"</span>
+        <span class="n">BaseCameraModelCUDA</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span><span class="s2">"BaseCameraModel"</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">BaseCameraModelCUDA</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
             <span class="n">width</span><span class="p">,</span>
             <span class="n">height</span><span class="p">,</span>
@@ -651,23 +651,23 @@
 
 <span class="k">class</span><span class="w"> </span><span class="nc">FOV</span><span class="p">(</span><span class="n">FOVBase</span><span class="p">):</span>
     <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">from_base</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">base</span><span class="p">:</span> <span class="n">FOVBase</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;FOV&quot;</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">from_base</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">base</span><span class="p">:</span> <span class="n">FOVBase</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"FOV"</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="n">base</span><span class="o">.</span><span class="n">start</span><span class="p">,</span> <span class="n">span</span><span class="o">=</span><span class="n">base</span><span class="o">.</span><span class="n">span</span><span class="p">,</span> <span class="n">direction</span><span class="o">=</span><span class="n">base</span><span class="o">.</span><span class="n">direction</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">FOVCUDA</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span><span class="s2">&quot;FOV&quot;</span><span class="p">)</span>
+        <span class="n">FOVCUDA</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span><span class="s2">"FOV"</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">FOVCUDA</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">start</span><span class="p">,</span> <span class="n">span</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">span</span><span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RowOffsetStructuredSpinningLidarModelParametersExt</span><span class="p">(</span>
     <span class="n">RowOffsetStructuredSpinningLidarModelParametersExtBase</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Lidar camera parameters extended with acceleration structures&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Lidar camera parameters extended with acceleration structures"""</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert to C++ custom class instance.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Convert to C++ custom class instance."""</span>
         <span class="n">LidarParamsCUDA</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_cls</span><span class="p">(</span>
-            <span class="s2">&quot;RowOffsetStructuredSpinningLidarModelParametersExt&quot;</span>
+            <span class="s2">"RowOffsetStructuredSpinningLidarModelParametersExt"</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="n">LidarParamsCUDA</span><span class="p">(</span>
             <span class="n">row_elevations_rad</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">row_elevations_rad</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -695,7 +695,7 @@
     <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3, 3]</span>
     <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Transforms Gaussians from world to camera coordinate system.</span>
+<span class="w">    </span><span class="sd">"""Transforms Gaussians from world to camera coordinate system.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        means: Gaussian means. [..., N, 3]</span>
@@ -707,13 +707,13 @@
 
 <span class="sd">        - **Gaussian means in camera coordinate system**. [..., C, N, 3]</span>
 <span class="sd">        - **Gaussian covariances in camera coordinate system**. [..., C, N, 3, 3]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">._torch_impl</span><span class="w"> </span><span class="kn">import</span> <span class="n">_world_to_cam</span>
 
     <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-        <span class="s2">&quot;world_to_cam() is removed from the CUDA backend as it&#39;s relatively easy to &quot;</span>
-        <span class="s2">&quot;implement in PyTorch. Currently use the PyTorch implementation instead. &quot;</span>
-        <span class="s2">&quot;This function will be completely removed in a future release.&quot;</span><span class="p">,</span>
+        <span class="s2">"world_to_cam() is removed from the CUDA backend as it's relatively easy to "</span>
+        <span class="s2">"implement in PyTorch. Currently use the PyTorch implementation instead. "</span>
+        <span class="s2">"This function will be completely removed in a future release."</span><span class="p">,</span>
         <span class="ne">DeprecationWarning</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
@@ -740,14 +740,14 @@
     <span class="n">b2</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;adam&quot;</span><span class="p">)(</span>
+    <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"adam"</span><span class="p">)(</span>
         <span class="n">param</span><span class="p">,</span> <span class="n">param_grad</span><span class="p">,</span> <span class="n">exp_avg</span><span class="p">,</span> <span class="n">exp_avg_sq</span><span class="p">,</span> <span class="n">valid</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">b1</span><span class="p">,</span> <span class="n">b2</span><span class="p">,</span> <span class="n">eps</span>
     <span class="p">)</span>
 
 
 <div class="viewcode-block" id="spherical_harmonics">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.spherical_harmonics">[docs]</a>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"sh-fwd"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics</span><span class="p">(</span>
     <span class="n">degrees_to_use</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
@@ -759,7 +759,7 @@
     <span class="n">gaussian_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Computes spherical harmonics.</span>
+<span class="w">    </span><span class="sd">"""Computes spherical harmonics.</span>
 
 <span class="sd">    The output channel count ``D`` is taken from the last dim of ``coeffs`` and</span>
 <span class="sd">    can be any positive integer (e.g. 3 for RGB, 1 for scalar features).</span>
@@ -788,10 +788,10 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Spherical harmonics. ``[..., C, N, D]`` or ``[nnz, D]``.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;spherical_harmonics&quot;</span><span class="p">)(</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"spherical_harmonics"</span><span class="p">)(</span>
         <span class="n">degrees_to_use</span><span class="p">,</span>
         <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -807,25 +807,25 @@
 
 <div class="viewcode-block" id="spherical_harmonics_l0">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.spherical_harmonics_l0">[docs]</a>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-l0-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"sh-l0-fwd"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics_l0</span><span class="p">(</span>
     <span class="n">sh0</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 1, D]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Computes the l=0 component of spherical harmonics.</span>
+<span class="w">    </span><span class="sd">"""Computes the l=0 component of spherical harmonics.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        sh0: SH coefficients for l=0. ``[N, 1, D]``.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        l=0 features. ``[N, D]``.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;spherical_harmonics_l0&quot;</span><span class="p">)(</span><span class="n">sh0</span><span class="o">.</span><span class="n">contiguous</span><span class="p">())</span></div>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"spherical_harmonics_l0"</span><span class="p">)(</span><span class="n">sh0</span><span class="o">.</span><span class="n">contiguous</span><span class="p">())</span></div>
 
 
 
 <div class="viewcode-block" id="spherical_harmonics_l1_plus">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.spherical_harmonics_l1_plus">[docs]</a>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-l1-plus-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"sh-l1-plus-fwd"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics_l1_plus</span><span class="p">(</span>
     <span class="n">degrees_to_use</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
@@ -837,7 +837,7 @@
     <span class="n">gaussian_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Computes the l&gt;=1 components of spherical harmonics.</span>
+<span class="w">    </span><span class="sd">"""Computes the l&gt;=1 components of spherical harmonics.</span>
 
 <span class="sd">    Unlike :func:`spherical_harmonics`, ``shN`` starts at the degree-one SH</span>
 <span class="sd">    basis; the degree-zero coefficient is intentionally omitted.</span>
@@ -861,10 +861,10 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        l&gt;=1 features. ``[..., C, N, D]`` or ``[nnz, D]``.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;spherical_harmonics_l1_plus&quot;</span><span class="p">)(</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"spherical_harmonics_l1_plus"</span><span class="p">)(</span>
         <span class="n">degrees_to_use</span><span class="p">,</span>
         <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -879,9 +879,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterSphericalHarmonics</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::spherical_harmonics op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::spherical_harmonics op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;spherical_harmonics&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"spherical_harmonics"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -922,7 +922,7 @@
             <span class="n">viewmats_rs</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">v_coeffs</span><span class="p">,</span> <span class="n">v_means</span><span class="p">,</span> <span class="n">v_viewmats</span><span class="p">,</span> <span class="n">v_viewmats_rs</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span>
         <span class="p">)(</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">degrees_to_use</span><span class="p">,</span>
             <span class="n">means</span><span class="p">,</span>
@@ -955,9 +955,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterSphericalHarmonicsL0</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the l=0 SH op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the l=0 SH op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;spherical_harmonics_l0&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"spherical_harmonics_l0"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -967,13 +967,13 @@
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
         <span class="p">(</span><span class="n">sh0</span><span class="p">,)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
-        <span class="k">return</span> <span class="p">(</span><span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span><span class="n">sh0</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">),)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span><span class="p">)(</span><span class="n">sh0</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">),)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterSphericalHarmonicsL1Plus</span><span class="p">(</span><span class="n">RegisterSphericalHarmonics</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the l&gt;=1 SH op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the l&gt;=1 SH op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;spherical_harmonics_l1_plus&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"spherical_harmonics_l1_plus"</span>
 
 
 <div class="viewcode-block" id="quat_scale_to_covar_preci">
@@ -985,7 +985,7 @@
     <span class="n">compute_preci</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">triu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Converts quaternions and scales to covariance and precision matrices.</span>
+<span class="w">    </span><span class="sd">"""Converts quaternions and scales to covariance and precision matrices.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        quats: Quaternions (No need to be normalized). [..., 4]</span>
@@ -1001,19 +1001,19 @@
 
 <span class="sd">        - **Covariance matrices**. If `triu` is True the returned shape is [..., 6], otherwise [..., 3, 3].</span>
 <span class="sd">        - **Precision matrices**. If `triu` is True the returned shape is [..., 6], otherwise [..., 3, 3].</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">quats</span> <span class="o">=</span> <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">scales</span> <span class="o">=</span> <span class="n">scales</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;quat_scale_to_covar_preci&quot;</span><span class="p">)(</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"quat_scale_to_covar_preci"</span><span class="p">)(</span>
         <span class="n">quats</span><span class="p">,</span> <span class="n">scales</span><span class="p">,</span> <span class="n">compute_covar</span><span class="p">,</span> <span class="n">compute_preci</span><span class="p">,</span> <span class="n">triu</span>
     <span class="p">)</span></div>
 
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterQuatScaleToCovarPreci</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::quat_scale_to_covar_preci op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::quat_scale_to_covar_preci op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;quat_scale_to_covar_preci&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"quat_scale_to_covar_preci"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -1025,7 +1025,7 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_precis</span><span class="p">):</span>
         <span class="n">quats</span><span class="p">,</span> <span class="n">scales</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="c1"># A disabled output has a None grad, which passes through unchanged.</span>
-        <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+        <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span><span class="p">)(</span>
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">triu</span><span class="p">,</span>
@@ -1048,7 +1048,7 @@
     <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Perspective projection on Gaussians.</span>
+<span class="w">    </span><span class="sd">"""Perspective projection on Gaussians.</span>
 <span class="sd">    DEPRECATED: please use `proj` with `ortho=False` instead.</span>
 
 <span class="sd">    Args:</span>
@@ -1063,10 +1063,10 @@
 
 <span class="sd">        - **Projected means**. [..., C, N, 2]</span>
 <span class="sd">        - **Projected covariances**. [..., C, N, 2, 2]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-        <span class="s2">&quot;persp_proj is deprecated and will be removed in a future release. &quot;</span>
-        <span class="s2">&quot;Use proj with ortho=False instead.&quot;</span><span class="p">,</span>
+        <span class="s2">"persp_proj is deprecated and will be removed in a future release. "</span>
+        <span class="s2">"Use proj with ortho=False instead."</span><span class="p">,</span>
         <span class="ne">DeprecationWarning</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">proj</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">ortho</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
@@ -1080,9 +1080,9 @@
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3, 3]</span>
     <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">"pinhole"</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Projection of Gaussians (perspective or orthographic).</span>
+<span class="w">    </span><span class="sd">"""Projection of Gaussians (perspective or orthographic).</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        means: Gaussian means. [..., C, N, 3]</span>
@@ -1096,21 +1096,21 @@
 
 <span class="sd">        - **Projected means**. [..., C, N, 2]</span>
 <span class="sd">        - **Projected covariances**. [..., C, N, 2, 2]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">means</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">covars</span> <span class="o">=</span> <span class="n">covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">Ks</span> <span class="o">=</span> <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_ewa_simple&quot;</span><span class="p">)(</span>
+    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">"CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"projection_ewa_simple"</span><span class="p">)(</span>
         <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">camera_model_type</span>
     <span class="p">)</span></div>
 
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjectionEWASimple</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_ewa_simple op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::projection_ewa_simple op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_ewa_simple&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"projection_ewa_simple"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -1123,7 +1123,7 @@
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_covars2d</span><span class="p">):</span>
         <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
-        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
             <span class="n">Ks</span><span class="p">,</span>
@@ -1145,7 +1145,7 @@
 
 <div class="viewcode-block" id="fully_fused_projection">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.fully_fused_projection">[docs]</a>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;project-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"project-fwd"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">fully_fused_projection</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span>  <span class="c1"># [..., N, 6] or None</span>
@@ -1162,10 +1162,10 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">"pinhole"</span><span class="p">,</span>
     <span class="n">opacities</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., N] or None</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D.</span>
+<span class="w">    </span><span class="sd">"""Projects Gaussians to 2D.</span>
 
 <span class="sd">    This function fuse the process of computing covariances</span>
 <span class="sd">    (:func:`quat_scale_to_covar_preci()`), transforming to camera space (:func:`world_to_cam()`),</span>
@@ -1231,7 +1231,7 @@
 <span class="sd">        - **depths**. The z-depth of the projected Gaussians. [..., C, N]</span>
 <span class="sd">        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [..., C, N, 3]</span>
 <span class="sd">        - **compensations**. The view-dependent opacity compensation factor. [..., C, N]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">means</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">covars</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">covars</span> <span class="o">=</span> <span class="n">covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
@@ -1241,7 +1241,7 @@
         <span class="k">if</span> <span class="n">scales</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">scales</span> <span class="o">=</span> <span class="n">scales</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">sparse_grad</span><span class="p">:</span>
-        <span class="k">assert</span> <span class="n">packed</span><span class="p">,</span> <span class="s2">&quot;sparse_grad is only supported when packed is True&quot;</span>
+        <span class="k">assert</span> <span class="n">packed</span><span class="p">,</span> <span class="s2">"sparse_grad is only supported when packed is True"</span>
 
     <span class="k">if</span> <span class="n">opacities</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">opacities</span> <span class="o">=</span> <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
@@ -1250,9 +1250,9 @@
     <span class="n">Ks</span> <span class="o">=</span> <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="sa">f</span><span class="s2">"CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span>
         <span class="p">)</span>
-        <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_ewa_3dgs_packed&quot;</span><span class="p">)(</span>
+        <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"projection_ewa_3dgs_packed"</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
@@ -1272,9 +1272,9 @@
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="sa">f</span><span class="s2">"CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span>
         <span class="p">)</span>
-        <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_ewa_3dgs_fused&quot;</span><span class="p">)(</span>
+        <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"projection_ewa_3dgs_fused"</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
@@ -1295,9 +1295,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjectionEWA3DGSFused</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_ewa_3dgs_fused op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::projection_ewa_3dgs_fused op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_ewa_3dgs_fused&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"projection_ewa_3dgs_fused"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -1351,7 +1351,7 @@
             <span class="n">compensations</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
@@ -1394,9 +1394,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjectionEWA3DGSPacked</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_ewa_3dgs_packed op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::projection_ewa_3dgs_packed op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_ewa_3dgs_packed&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"projection_ewa_3dgs_packed"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -1476,7 +1476,7 @@
             <span class="n">compensations</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
@@ -1525,7 +1525,7 @@
 <div class="viewcode-block" id="isect_tiles">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.isect_tiles">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;isect-camera&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"isect-camera"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">isect_tiles</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">radii</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
@@ -1546,7 +1546,7 @@
         <span class="n">Tensor</span>
     <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., N] or [nnz], enables AccuTile when provided</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Maps projected Gaussians to intersecting tiles.</span>
+<span class="w">    </span><span class="sd">"""Maps projected Gaussians to intersecting tiles.</span>
 
 <span class="sd">    When `conics` and `opacities` are provided the kernel uses conservative ellipse intersection (AccuTile/SNUGBOX),</span>
 <span class="sd">    skipping tiles that the opacity-thresholded ellipse does not touch. When either is `None` the kernel falls back to the original axis-aligned bounding box.</span>
@@ -1577,11 +1577,11 @@
 <span class="sd">          Xc and Xt are the maximum number of bits required to represent the image and</span>
 <span class="sd">          tile ids, respectively. Int64 [n_isects]</span>
 <span class="sd">        - **Flatten ids**. The global flatten indices in [I * N] or [nnz] (packed). [n_isects]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
         <span class="n">image_ids</span> <span class="o">=</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
         <span class="n">gaussian_ids</span> <span class="o">=</span> <span class="n">gaussian_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="n">tiles_per_gauss</span><span class="p">,</span> <span class="n">isect_ids</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;intersect_tile&quot;</span><span class="p">)(</span>
+    <span class="n">tiles_per_gauss</span><span class="p">,</span> <span class="n">isect_ids</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"intersect_tile"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">radii</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">depths</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1601,7 +1601,7 @@
 
 
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;isect-lidar&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"isect-lidar"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">isect_tiles_lidar</span><span class="p">(</span>
     <span class="n">lidar</span><span class="p">:</span> <span class="n">RowOffsetStructuredSpinningLidarModelParametersExt</span><span class="p">,</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
@@ -1614,7 +1614,7 @@
     <span class="n">image_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">gaussian_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Maps projected Gaussians to intersecting tiles.</span>
+<span class="w">    </span><span class="sd">"""Maps projected Gaussians to intersecting tiles.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.</span>
@@ -1637,12 +1637,12 @@
 <span class="sd">          Xc and Xt are the maximum number of bits required to represent the image and</span>
 <span class="sd">          tile ids, respectively. Int64 [n_isects]</span>
 <span class="sd">        - **Flatten ids**. The global flatten indices in [I * N] or [nnz] (packed). [n_isects]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
         <span class="n">image_ids</span> <span class="o">=</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
         <span class="n">gaussian_ids</span> <span class="o">=</span> <span class="n">gaussian_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">tiles_per_gauss</span><span class="p">,</span> <span class="n">isect_ids</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-        <span class="s2">&quot;intersect_tile_lidar&quot;</span>
+        <span class="s2">"intersect_tile_lidar"</span>
     <span class="p">)(</span>
         <span class="n">lidar</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">(),</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1660,14 +1660,14 @@
 <div class="viewcode-block" id="isect_offset_encode">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.isect_offset_encode">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;offsets&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"offsets"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">isect_offset_encode</span><span class="p">(</span>
     <span class="n">isect_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">n_images</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Encodes intersection ids to offsets.</span>
+<span class="w">    </span><span class="sd">"""Encodes intersection ids to offsets.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        isect_ids: Intersection ids. [n_isects]</span>
@@ -1677,15 +1677,15 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Offsets. [I, tile_height, tile_width]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;intersect_offset&quot;</span><span class="p">)(</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"intersect_offset"</span><span class="p">)(</span>
         <span class="n">isect_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span> <span class="n">n_images</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">,</span> <span class="n">tile_height</span>
     <span class="p">)</span></div>
 
 
 
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;isect-sparse&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"isect-sparse"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">isect_tiles_sparse</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N, 2] or [nnz, 2]</span>
     <span class="n">radii</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N, 2] or [nnz, 2]</span>
@@ -1698,7 +1698,7 @@
     <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">image_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz] int32, required in packed mode</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Maps projected Gaussians to a caller-supplied set of *active* tiles.</span>
+<span class="w">    </span><span class="sd">"""Maps projected Gaussians to a caller-supplied set of *active* tiles.</span>
 
 <span class="sd">    The sparse counterpart of :func:`isect_tiles` + :func:`isect_offset_encode`:</span>
 <span class="sd">    it enumerates only the intersections that fall in tiles flagged active by</span>
@@ -1729,14 +1729,14 @@
 <span class="sd">        - **Flatten ids**. Int32 [n_isects]. The global flatten indices in</span>
 <span class="sd">          [I * N] (dense) or [nnz] (packed), sorted by ``(image_id, tile_id,</span>
 <span class="sd">          depth)`` near-to-far.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">packed</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span>
     <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
         <span class="n">nnz</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
         <span class="k">assert</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span>
         <span class="k">assert</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span>
-        <span class="k">assert</span> <span class="n">image_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;image_ids is required when packed ([nnz, 2])&quot;</span>
+        <span class="k">assert</span> <span class="n">image_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">"image_ids is required when packed ([nnz, 2])"</span>
         <span class="k">assert</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">I</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
@@ -1752,7 +1752,7 @@
         <span class="n">active_tiles</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="n">tile_offsets</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;intersect_tile_sparse&quot;</span><span class="p">)(</span>
+    <span class="n">tile_offsets</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"intersect_tile_sparse"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">radii</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">depths</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1775,7 +1775,7 @@
     <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Builds the per-active-tile layout consumed by sparse rasterization.</span>
+<span class="w">    </span><span class="sd">"""Builds the per-active-tile layout consumed by sparse rasterization.</span>
 
 <span class="sd">    Given the pixels to render, it computes the tile/pixel bookkeeping that lets</span>
 <span class="sd">    sparse rasterization touch only active tiles and write only active pixels.</span>
@@ -1783,7 +1783,7 @@
 <span class="sd">    ``image_ids``, where ``image_ids`` is the per-element batch index).</span>
 
 <span class="sd">    Coordinate convention: ``pixels[p] = (row, col)`` with ``row`` in</span>
-<span class="sd">    ``[0, height)`` and ``col`` in ``[0, width)``. A pixel&#39;s dense tile id is</span>
+<span class="sd">    ``[0, height)`` and ``col`` in ``[0, width)``. A pixel's dense tile id is</span>
 <span class="sd">    ``image_id * (tile_height * tile_width) + (row // tile_size) * tile_width +</span>
 <span class="sd">    (col // tile_size)``.</span>
 
@@ -1815,12 +1815,12 @@
 <span class="sd">        Callers must deduplicate: ``pixels`` must not contain a repeated</span>
 <span class="sd">        ``(image, row, col)``. The empty case (``P == 0``) returns a length-1</span>
 <span class="sd">        ``tile_pixel_cumsum`` of zero.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">assert</span> <span class="n">pixels</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">pixels</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span><span class="p">,</span> <span class="n">pixels</span><span class="o">.</span><span class="n">shape</span>
     <span class="n">P</span> <span class="o">=</span> <span class="n">pixels</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
     <span class="k">assert</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">P</span><span class="p">,),</span> <span class="p">(</span><span class="n">image_ids</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">P</span><span class="p">)</span>
 
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;build_sparse_tile_layout&quot;</span><span class="p">)(</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"build_sparse_tile_layout"</span><span class="p">)(</span>
         <span class="n">pixels</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">image_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">n_images</span><span class="p">,</span>
@@ -1832,7 +1832,7 @@
 
 <div class="viewcode-block" id="rasterize_to_pixels">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_pixels">[docs]</a>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render2D-fwd"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -1848,7 +1848,7 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to pixels.</span>
+<span class="w">    </span><span class="sd">"""Rasterizes Gaussians to pixels.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.</span>
@@ -1872,14 +1872,14 @@
 
 <span class="sd">        - **Rendered colors**. [..., image_height, image_width, channels]</span>
 <span class="sd">        - **Rendered alphas**. [..., image_height, image_width, 1]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
     <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">,</span> <span class="n">_last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-        <span class="s2">&quot;rasterize_to_pixels_3dgs&quot;</span>
+        <span class="s2">"rasterize_to_pixels_3dgs"</span>
     <span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1902,7 +1902,7 @@
 
 
 
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-sparse-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render2D-sparse-fwd"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_sparse</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -1925,7 +1925,7 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to a packed set of pixels (sparse rasterization).</span>
+<span class="w">    </span><span class="sd">"""Rasterizes Gaussians to a packed set of pixels (sparse rasterization).</span>
 
 <span class="sd">    Renders only the pixels described by the sparse tile layout, touching only</span>
 <span class="sd">    active tiles. Outputs are packed in the original pixel order -- the same</span>
@@ -1967,14 +1967,14 @@
 
 <span class="sd">        - **Rendered colors**. [P, channels]</span>
 <span class="sd">        - **Rendered alphas**. [P, 1]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
     <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">,</span> <span class="n">_last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-        <span class="s2">&quot;rasterize_to_pixels_sparse&quot;</span>
+        <span class="s2">"rasterize_to_pixels_sparse"</span>
     <span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2006,7 +2006,7 @@
 <div class="viewcode-block" id="rasterize_num_contributing_gaussians">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_num_contributing_gaussians">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-count&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render2D-count"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_num_contributing_gaussians</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -2017,7 +2017,7 @@
     <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Counts contributing Gaussians per pixel and returns accumulated alpha.</span>
+<span class="w">    </span><span class="sd">"""Counts contributing Gaussians per pixel and returns accumulated alpha.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        means2d: Projected Gaussian means. [..., N, 2] for dense inputs, or [nnz, 2] for packed inputs.</span>
@@ -2034,8 +2034,8 @@
 
 <span class="sd">        - **Number of contributing Gaussians**. [..., image_height, image_width]</span>
 <span class="sd">        - **Rendered alphas**. [..., image_height, image_width]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_num_contributing_gaussians&quot;</span><span class="p">)(</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_num_contributing_gaussians"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2049,7 +2049,7 @@
 
 
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-count-sparse&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render2D-count-sparse"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_num_contributing_gaussians_sparse</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -2066,7 +2066,7 @@
     <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Sparse counterpart of :func:`rasterize_num_contributing_gaussians`.</span>
+<span class="w">    </span><span class="sd">"""Sparse counterpart of :func:`rasterize_num_contributing_gaussians`.</span>
 
 <span class="sd">    Counts contributing Gaussians (and accumulated alpha) for only the requested</span>
 <span class="sd">    pixels, packed in original-pixel order (the order of the ``pixels`` /</span>
@@ -2095,8 +2095,8 @@
 
 <span class="sd">        - **Number of contributing Gaussians**. Int32 [P].</span>
 <span class="sd">        - **Rendered alphas**. [P].</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_num_contributing_gaussians_sparse&quot;</span><span class="p">)(</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_num_contributing_gaussians_sparse"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2117,7 +2117,7 @@
 <div class="viewcode-block" id="rasterize_contributing_gaussian_ids">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_contributing_gaussian_ids">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-contributors&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render2D-contributors"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_contributing_gaussian_ids</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -2129,7 +2129,7 @@
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">num_contributing_gaussians</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., image_height, image_width]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Returns all contributing Gaussian IDs and weights per pixel.</span>
+<span class="w">    </span><span class="sd">"""Returns all contributing Gaussian IDs and weights per pixel.</span>
 
 <span class="sd">    The output is padded to ``num_contributing_gaussians.max()`` samples per</span>
 <span class="sd">    pixel. Valid entries are in front-to-back order, IDs are padded with ``-1``,</span>
@@ -2151,8 +2151,8 @@
 
 <span class="sd">        - **Gaussian IDs**. [..., image_height, image_width, max_num_contributing]</span>
 <span class="sd">        - **Radiance weights**. [..., image_height, image_width, max_num_contributing]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_contributing_gaussian_ids&quot;</span><span class="p">)(</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_contributing_gaussian_ids"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2167,7 +2167,7 @@
 
 
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-contributors-sparse&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render2D-contributors-sparse"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_contributing_gaussian_ids_sparse</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -2185,7 +2185,7 @@
     <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Sparse counterpart of :func:`rasterize_contributing_gaussian_ids`.</span>
+<span class="w">    </span><span class="sd">"""Sparse counterpart of :func:`rasterize_contributing_gaussian_ids`.</span>
 
 <span class="sd">    Records the contributing Gaussian ids and weights for only the requested</span>
 <span class="sd">    pixels, packed in original-pixel order (``[P, K]`` where ``K`` is the max</span>
@@ -2216,8 +2216,8 @@
 
 <span class="sd">        - **Contributing Gaussian ids**. Int32 [P, K] (-1 padded).</span>
 <span class="sd">        - **Contributing weights**. [P, K].</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_contributing_gaussian_ids_sparse&quot;</span><span class="p">)(</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_contributing_gaussian_ids_sparse"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2239,7 +2239,7 @@
 <div class="viewcode-block" id="rasterize_top_contributing_gaussian_ids">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_top_contributing_gaussian_ids">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-top-contributors&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render2D-top-contributors"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_top_contributing_gaussian_ids</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -2251,7 +2251,7 @@
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">num_depth_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Returns the top radiance-weight Gaussian IDs and weights per pixel.</span>
+<span class="w">    </span><span class="sd">"""Returns the top radiance-weight Gaussian IDs and weights per pixel.</span>
 
 <span class="sd">    The selected samples are the strongest contributors by ``alpha * T`` during</span>
 <span class="sd">    front-to-back rasterization, then sorted back into front-to-back order.</span>
@@ -2272,8 +2272,8 @@
 
 <span class="sd">        - **Gaussian IDs**. [..., image_height, image_width, num_depth_samples]</span>
 <span class="sd">        - **Radiance weights**. [..., image_height, image_width, num_depth_samples]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_top_contributing_gaussian_ids&quot;</span><span class="p">)(</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_top_contributing_gaussian_ids"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2288,7 +2288,7 @@
 
 
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-top-contributors-sparse&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"render2D-top-contributors-sparse"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_top_contributing_gaussian_ids_sparse</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -2306,7 +2306,7 @@
     <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">num_depth_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Sparse counterpart of :func:`rasterize_top_contributing_gaussian_ids`.</span>
+<span class="w">    </span><span class="sd">"""Sparse counterpart of :func:`rasterize_top_contributing_gaussian_ids`.</span>
 
 <span class="sd">    Keeps the top-``num_depth_samples`` contributors (by weight, in depth order)</span>
 <span class="sd">    for only the requested pixels, packed in original-pixel order</span>
@@ -2336,8 +2336,8 @@
 
 <span class="sd">        - **Top Gaussian ids**. Int32 [P, num_depth_samples] (-1 padded).</span>
 <span class="sd">        - **Top weights**. [P, num_depth_samples].</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_top_contributing_gaussian_ids_sparse&quot;</span><span class="p">)(</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_top_contributing_gaussian_ids_sparse"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2357,9 +2357,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterRasterizeToPixels3DGS</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::rasterize_to_pixels_3dgs op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::rasterize_to_pixels_3dgs op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;rasterize_to_pixels_3dgs&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"rasterize_to_pixels_3dgs"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -2424,7 +2424,7 @@
             <span class="n">v_colors</span><span class="p">,</span>
             <span class="n">v_opacities</span><span class="p">,</span>
             <span class="n">v_backgrounds</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span><span class="p">)(</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">colors</span><span class="p">,</span>
@@ -2467,9 +2467,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterRasterizeToPixelsSparse</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::rasterize_to_pixels_sparse op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::rasterize_to_pixels_sparse op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;rasterize_to_pixels_sparse&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"rasterize_to_pixels_sparse"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -2553,7 +2553,7 @@
             <span class="n">v_colors</span><span class="p">,</span>
             <span class="n">v_opacities</span><span class="p">,</span>
             <span class="n">v_backgrounds</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span><span class="p">)(</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">colors</span><span class="p">,</span>
@@ -2624,7 +2624,7 @@
     <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, channels]</span>
     <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, tile_height, tile_width]</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">"pinhole"</span><span class="p">,</span>
     <span class="n">ut_params</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">UnscentedTransformParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 6]</span>
     <span class="c1"># distortion</span>
@@ -2641,7 +2641,7 @@
     <span class="n">return_normals</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">renderer_config</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to pixels.</span>
+<span class="w">    </span><span class="sd">"""Rasterizes Gaussians to pixels.</span>
 
 <span class="sd">    Similar to `rasterize_to_pixels()`, but compute the Gaussian responses in the</span>
 <span class="sd">    3D world space instead of the 2D image space. Supports rolling shutter and</span>
@@ -2662,7 +2662,7 @@
 
 <span class="sd">        - **Rendered colors**. [..., C, image_height, image_width, channels]</span>
 <span class="sd">        - **Rendered alphas**. [..., C, image_height, image_width, 1]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">ut_params</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">ut_params</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">()</span>
 
@@ -2701,7 +2701,7 @@
     <span class="k">return</span> <span class="n">colors</span><span class="p">,</span> <span class="n">alphas</span>
 
 
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;raster3D-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"raster3D-fwd"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_eval3d_extra</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
@@ -2717,7 +2717,7 @@
     <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, channels]</span>
     <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, tile_height, tile_width]</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">"pinhole"</span><span class="p">,</span>
     <span class="n">ut_params</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">UnscentedTransformParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, P, 6]</span>
     <span class="c1"># distortion</span>
@@ -2737,7 +2737,7 @@
     <span class="n">return_last_ids</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">unsafe_masked_tile_outputs</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to pixels, returning extra information for debugging.</span>
+<span class="w">    </span><span class="sd">"""Rasterizes Gaussians to pixels, returning extra information for debugging.</span>
 
 <span class="sd">    Similar to `rasterize_to_pixels_eval3d()`, but can return the last gaussian id</span>
 <span class="sd">    accumulated in a pixel and optionally the number of accumulated samples per pixel.</span>
@@ -2770,16 +2770,16 @@
 <span class="sd">        - **Last flatten_idx** (optional). [..., C, image_height, image_width]. If return_last_ids=True.</span>
 <span class="sd">        - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.</span>
 <span class="sd">        - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">ut_params</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">ut_params</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">()</span>
     <span class="n">renderer_config</span> <span class="o">=</span> <span class="n">_renderer_config_to_cuda</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span>
 
     <span class="c1"># Packed colors (colors.ndim == means.ndim) are not supported yet.</span>
     <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="n">means</span><span class="o">.</span><span class="n">ndim</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;packed mode is not supported yet&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">"packed mode is not supported yet"</span><span class="p">)</span>
 
-    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">"CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">ftheta_coeffs</span>
         <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -2793,7 +2793,7 @@
         <span class="n">last_ids</span><span class="p">,</span>
         <span class="n">sample_counts</span><span class="p">,</span>
         <span class="n">render_normals</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_from_world_3dgs&quot;</span><span class="p">)(</span>
+    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_to_pixels_from_world_3dgs"</span><span class="p">)(</span>
         <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">scales</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2847,7 +2847,7 @@
     <span class="n">isect_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., tile_height, tile_width]</span>
     <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes a batch of Gaussians to images but only returns the indices.</span>
+<span class="w">    </span><span class="sd">"""Rasterizes a batch of Gaussians to images but only returns the indices.</span>
 
 <span class="sd">    .. note::</span>
 
@@ -2875,9 +2875,9 @@
 <span class="sd">        - **Gaussian ids**. Gaussian ids for the pixel intersection. A flattened list of shape [M].</span>
 <span class="sd">        - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].</span>
 <span class="sd">        - **Image ids**. image indices. A flattened list of shape [M].</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_indices_3dgs&quot;</span><span class="p">)(</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_to_indices_3dgs"</span><span class="p">)(</span>
         <span class="n">range_start</span><span class="p">,</span>
         <span class="n">range_end</span><span class="p">,</span>
         <span class="n">transmittances</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2893,7 +2893,7 @@
 
 
 
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;projectUT-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"projectUT-fwd"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">fully_fused_projection_with_ut</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
@@ -2908,7 +2908,7 @@
     <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e10</span><span class="p">,</span>
     <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
     <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">"pinhole"</span><span class="p">,</span>
     <span class="n">ut_params</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">UnscentedTransformParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="c1"># distortion</span>
     <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
@@ -2922,7 +2922,7 @@
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
     <span class="n">global_z_order</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D using Unscented Transform (UT).</span>
+<span class="w">    </span><span class="sd">"""Projects Gaussians to 2D using Unscented Transform (UT).</span>
 
 <span class="sd">    similar to `fully_fused_projection()`, but supports camera distortion and</span>
 <span class="sd">    rolling shutter.</span>
@@ -2935,17 +2935,23 @@
 <span class="sd">            Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted</span>
 <span class="sd">            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically</span>
 <span class="sd">            faster and sufficient for most cases, while Euclidean distance can be useful for scenes</span>
-<span class="sd">            with wide field-of-view or non-standard camera models. Default: True.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">            with wide field-of-view or non-standard camera models. When False, the UT projection</span>
+<span class="sd">            kernel uses Euclidean near/far culling only for LiDAR and FTheta; forward-only camera</span>
+<span class="sd">            models continue to use camera-space z culling. A wide-FOV FTheta calibration therefore</span>
+<span class="sd">            requires ``global_z_order=False`` to render its beyond-180-degree band. The same setting</span>
+<span class="sd">            also makes the D/ED depth channel use Euclidean distance. An FTheta ``max_angle`` must</span>
+<span class="sd">            come from calibration and must not be raised merely to widen rendered FOV: its forward</span>
+<span class="sd">            polynomial is trusted only over ``[0, max_angle]``. Default: True.</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">lidar_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span>
             <span class="n">lidar_coeffs</span><span class="p">,</span> <span class="n">RowOffsetStructuredSpinningLidarModelParametersExt</span>
         <span class="p">)</span>
 
-    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">"CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-        <span class="s2">&quot;projection_ut_3dgs_fused&quot;</span>
+        <span class="s2">"projection_ut_3dgs_fused"</span>
     <span class="p">)(</span>
         <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2993,7 +2999,7 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Prepare Gaussians for rasterization</span>
+<span class="w">    </span><span class="sd">"""Prepare Gaussians for rasterization</span>
 
 <span class="sd">    This function prepares ray-splat intersection matrices, computes</span>
 <span class="sd">    per splat bounding box and 2D means in image space.</span>
@@ -3036,17 +3042,17 @@
 <span class="sd">        - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates [..., C, N, 3, 3]</span>
 <span class="sd">        - **normals**. The normals in camera spaces. [..., C, N, 3]</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">means</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">quats</span> <span class="o">=</span> <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">scales</span> <span class="o">=</span> <span class="n">scales</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">sparse_grad</span><span class="p">:</span>
-        <span class="k">assert</span> <span class="n">packed</span><span class="p">,</span> <span class="s2">&quot;sparse_grad is only supported when packed is True&quot;</span>
+        <span class="k">assert</span> <span class="n">packed</span><span class="p">,</span> <span class="s2">"sparse_grad is only supported when packed is True"</span>
 
     <span class="n">viewmats</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">Ks</span> <span class="o">=</span> <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_2dgs_packed&quot;</span><span class="p">)(</span>
+        <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"projection_2dgs_packed"</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
@@ -3060,7 +3066,7 @@
             <span class="n">sparse_grad</span><span class="p">,</span>
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_2dgs_fused&quot;</span><span class="p">)(</span>
+        <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"projection_2dgs_fused"</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
@@ -3077,9 +3083,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjection2DGSFused</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_2dgs_fused op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::projection_2dgs_fused op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_2dgs_fused&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"projection_2dgs_fused"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -3121,7 +3127,7 @@
             <span class="n">ray_transforms</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
@@ -3156,9 +3162,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjection2DGSPacked</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_2dgs_packed op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::projection_2dgs_packed op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_2dgs_packed&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"projection_2dgs_packed"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -3227,7 +3233,7 @@
             <span class="n">ray_transforms</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
@@ -3284,7 +3290,7 @@
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">distloss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize Gaussians to pixels.</span>
+<span class="w">    </span><span class="sd">"""Rasterize Gaussians to pixels.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.</span>
@@ -3313,7 +3319,7 @@
 <span class="sd">        - **Rendered median depth**.[..., image_height, image_width, 1]</span>
 
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -3328,7 +3334,7 @@
         <span class="n">means2d_absgrad</span><span class="p">,</span>
         <span class="n">_last_ids</span><span class="p">,</span>
         <span class="n">_median_ids</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_2dgs&quot;</span><span class="p">)(</span>
+    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_to_pixels_2dgs"</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">ray_transforms</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -3354,9 +3360,9 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterRasterizeToPixels2DGS</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::rasterize_to_pixels_2dgs op.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Python autograd hooks for the gsplat::rasterize_to_pixels_2dgs op."""</span>
 
-    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;rasterize_to_pixels_2dgs&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">"rasterize_to_pixels_2dgs"</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -3452,7 +3458,7 @@
             <span class="n">v_normals</span><span class="p">,</span>
             <span class="n">v_densify</span><span class="p">,</span>
             <span class="n">v_backgrounds</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd"</span><span class="p">)(</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">ray_transforms</span><span class="p">,</span>
             <span class="n">colors</span><span class="p">,</span>
@@ -3518,7 +3524,7 @@
     <span class="n">isect_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes a batch of Gaussians to images but only returns the indices.</span>
+<span class="w">    </span><span class="sd">"""Rasterizes a batch of Gaussians to images but only returns the indices.</span>
 
 <span class="sd">    .. note::</span>
 
@@ -3547,9 +3553,9 @@
 <span class="sd">        - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].</span>
 <span class="sd">        - **Camera ids**. Camera indices. A flattened list of shape [M].</span>
 <span class="sd">        - **Batch ids**. Batch indices. A flattened list of shape [M].</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_indices_2dgs&quot;</span><span class="p">)(</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">"rasterize_to_indices_2dgs"</span><span class="p">)(</span>
         <span class="n">range_start</span><span class="p">,</span>
         <span class="n">range_end</span><span class="p">,</span>
         <span class="n">transmittances</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>

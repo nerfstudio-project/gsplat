@@ -531,8 +531,14 @@ transformed by rotation, flipped if facing away from ray). Requires
 with_eval3d=True. Default is False.</p></li>
 <li><p><strong>global_z_order</strong> – Whether to use z-depth (True) or Euclidean distance (False) for
 sorting Gaussians during rasterization. When True, Gaussians are sorted by their
-z-coordinate in camera space. When False, they are sorted by their Euclidean
-distance from the camera origin. Default is True.</p></li>
+z-coordinate in camera space. When False, they are sorted by their Euclidean distance
+from the camera origin. The UT projection kernel then uses Euclidean near/far culling
+only for LiDAR and FTheta; forward-only camera models continue to use camera-space z
+culling. A wide-FOV FTheta calibration therefore requires <code class="docutils literal notranslate"><span class="pre">global_z_order=False</span></code> to
+render its beyond-180-degree band. The same setting also makes the D/ED depth channel
+use Euclidean distance. An FTheta <code class="docutils literal notranslate"><span class="pre">max_angle</span></code> must come from calibration and must not
+be raised merely to widen rendered FOV: its forward polynomial is trusted only over
+<code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">max_angle]</span></code>. Default is True.</p></li>
 <li><p><strong>radial_coeffs</strong> – Opencv pinhole/fisheye radial distortion coefficients. Default is None.
 For pinhole camera, the shape should be […, C, 6]. For fisheye camera, the shape
 should be […, C, 4].</p></li>
@@ -583,9 +589,9 @@ X is D; if <cite>render_mode</cite> is “D” or “ED”, X is 1; if <cite>ren
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span> <span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">alphas</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 <span class="go">torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span> <span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
-<span class="go">dict_keys([&#39;camera_ids&#39;, &#39;gaussian_ids&#39;, &#39;radii&#39;, &#39;means2d&#39;, &#39;depths&#39;, &#39;conics&#39;,</span>
-<span class="go">&#39;opacities&#39;, &#39;tile_width&#39;, &#39;tile_height&#39;, &#39;tiles_per_gauss&#39;, &#39;isect_ids&#39;,</span>
-<span class="go">&#39;flatten_ids&#39;, &#39;isect_offsets&#39;, &#39;width&#39;, &#39;height&#39;, &#39;tile_size&#39;])</span>
+<span class="go">dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'conics',</span>
+<span class="go">'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',</span>
+<span class="go">'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size'])</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -739,10 +745,10 @@ L1 version, different from L2 version in 2DGS paper.</p>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span> <span class="p">(</span><span class="n">distort</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">median_depth</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 <span class="go">torch.Size([1, 200, 300, 1]) torch.Size([1, 200, 300, 1])</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span> <span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
-<span class="go">dict_keys([&#39;camera_ids&#39;, &#39;gaussian_ids&#39;, &#39;radii&#39;, &#39;means2d&#39;, &#39;depths&#39;, &#39;ray_transforms&#39;,</span>
-<span class="go">&#39;opacities&#39;, &#39;normals&#39;, &#39;tile_width&#39;, &#39;tile_height&#39;, &#39;tiles_per_gauss&#39;, &#39;isect_ids&#39;,</span>
-<span class="go">&#39;flatten_ids&#39;, &#39;isect_offsets&#39;, &#39;width&#39;, &#39;height&#39;, &#39;tile_size&#39;, &#39;n_cameras&#39;, &#39;render_distort&#39;,</span>
-<span class="go">&#39;gradient_2dgs&#39;])</span>
+<span class="go">dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'ray_transforms',</span>
+<span class="go">'opacities', 'normals', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',</span>
+<span class="go">'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size', 'n_cameras', 'render_distort',</span>
+<span class="go">'gradient_2dgs'])</span>
 </pre></div>
 </div>
 </dd></dl>

@@ -378,7 +378,7 @@ the future.</p>
 <span class="n">alphas</span> <span class="o">=</span> <span class="n">alphas</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># [height, width]</span>
 
 <span class="c1"># The intermediate results from fully_fused_projection can be accessed via meta, e.g.,</span>
-<span class="n">means2d</span> <span class="o">=</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;means2d&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># [N, 2]</span>
+<span class="n">means2d</span> <span class="o">=</span> <span class="n">meta</span><span class="p">[</span><span class="s1">'means2d'</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># [N, 2]</span>
 </pre></div>
 </div>
 </section>
@@ -463,19 +463,19 @@ from <cite>project_gaussians</cite> to <cite>rasterize_gaussians</cite>:</p>
 
 <span class="n">expected_depth</span><span class="p">,</span> <span class="n">alphas</span><span class="p">,</span> <span class="n">meta</span> <span class="o">=</span> <span class="n">rasterization</span><span class="p">(</span>
     <span class="o">...</span>
-    <span class="n">render_mode</span><span class="o">=</span><span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="c1"># render expected depth only</span>
+    <span class="n">render_mode</span><span class="o">=</span><span class="s2">"ED"</span><span class="p">,</span> <span class="c1"># render expected depth only</span>
     <span class="o">...</span>
 <span class="p">)</span>
 
 <span class="n">accumulated_depth</span><span class="p">,</span> <span class="n">alphas</span><span class="p">,</span> <span class="n">meta</span> <span class="o">=</span> <span class="n">rasterization</span><span class="p">(</span>
     <span class="o">...</span>
-    <span class="n">render_mode</span><span class="o">=</span><span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="c1"># render accumulated depth only</span>
+    <span class="n">render_mode</span><span class="o">=</span><span class="s2">"D"</span><span class="p">,</span> <span class="c1"># render accumulated depth only</span>
     <span class="o">...</span>
 <span class="p">)</span>
 
 <span class="n">rgbd</span><span class="p">,</span> <span class="n">alphas</span><span class="p">,</span> <span class="n">meta</span> <span class="o">=</span> <span class="n">rasterization</span><span class="p">(</span>
     <span class="o">...</span>
-    <span class="n">render_mode</span><span class="o">=</span><span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span> <span class="c1"># render color with expected depth</span>
+    <span class="n">render_mode</span><span class="o">=</span><span class="s2">"RGB+ED"</span><span class="p">,</span> <span class="c1"># render color with expected depth</span>
     <span class="o">...</span>
 <span class="p">)</span>
 </pre></div>

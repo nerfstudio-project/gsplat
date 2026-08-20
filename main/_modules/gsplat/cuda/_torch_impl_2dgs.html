@@ -312,14 +312,14 @@
 <span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
-<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the "License");</span>
 <span class="c1"># you may not use this file except in compliance with the License.</span>
 <span class="c1"># You may obtain a copy of the License at</span>
 <span class="c1">#</span>
 <span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
-<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># distributed under the License is distributed on an "AS IS" BASIS,</span>
 <span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
@@ -346,13 +346,13 @@
     <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e10</span><span class="p">,</span>
     <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection_2dgs()`</span>
+<span class="w">    </span><span class="sd">"""PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection_2dgs()`</span>
 
 <span class="sd">    .. note::</span>
 
 <span class="sd">        This is a minimal implementation of fully fused version, which has more</span>
 <span class="sd">        arguments. Not all arguments are supported.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">3</span><span class="p">]</span>
@@ -365,10 +365,10 @@
     <span class="n">R_cw</span> <span class="o">=</span> <span class="n">viewmats</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">]</span>  <span class="c1"># [..., C, 3, 3]</span>
     <span class="n">t_cw</span> <span class="o">=</span> <span class="n">viewmats</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>  <span class="c1"># [..., C, 3]</span>
     <span class="n">means_c</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s2">&quot;...cij,...nj-&gt;...cni&quot;</span><span class="p">,</span> <span class="n">R_cw</span><span class="p">,</span> <span class="n">means</span><span class="p">)</span> <span class="o">+</span> <span class="n">t_cw</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s2">"...cij,...nj-&gt;...cni"</span><span class="p">,</span> <span class="n">R_cw</span><span class="p">,</span> <span class="n">means</span><span class="p">)</span> <span class="o">+</span> <span class="n">t_cw</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
     <span class="p">)</span>  <span class="c1"># [..., C, N, 3]</span>
     <span class="n">RS_wl</span> <span class="o">=</span> <span class="n">_quat_scale_to_matrix</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">scales</span><span class="p">)</span>
-    <span class="n">RS_cl</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s2">&quot;...cij,...njk-&gt;...cnik&quot;</span><span class="p">,</span> <span class="n">R_cw</span><span class="p">,</span> <span class="n">RS_wl</span><span class="p">)</span>  <span class="c1"># [..., C, N, 3, 3]</span>
+    <span class="n">RS_cl</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s2">"...cij,...njk-&gt;...cnik"</span><span class="p">,</span> <span class="n">R_cw</span><span class="p">,</span> <span class="n">RS_wl</span><span class="p">)</span>  <span class="c1"># [..., C, N, 3, 3]</span>
 
     <span class="c1"># compute normals</span>
     <span class="n">normals</span> <span class="o">=</span> <span class="n">RS_cl</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>  <span class="c1"># [..., C, N, 3]</span>
@@ -380,7 +380,7 @@
     <span class="c1"># ray transform matrix, omitting the z rotation</span>
     <span class="n">T_cl</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">RS_cl</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">2</span><span class="p">],</span> <span class="n">means_c</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># [..., C, N, 3, 3]</span>
     <span class="n">T_sl</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span>
-        <span class="s2">&quot;...cij,...cnjk-&gt;...cnik&quot;</span><span class="p">,</span> <span class="n">Ks</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">],</span> <span class="n">T_cl</span>
+        <span class="s2">"...cij,...cnjk-&gt;...cnik"</span><span class="p">,</span> <span class="n">Ks</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">],</span> <span class="n">T_cl</span>
     <span class="p">)</span>  <span class="c1"># [..., C, N, 3, 3]</span>
     <span class="c1"># in paper notation M = (WH)^T</span>
     <span class="c1"># later h_u = M @ h_x, h_v = M @ h_y</span>
@@ -432,14 +432,14 @@
     <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Alpha compositing for 2DGS.</span>
+<span class="w">    </span><span class="sd">"""Alpha compositing for 2DGS.</span>
 
 <span class="sd">    .. warning::</span>
 <span class="sd">        This function requires the nerfacc package to be installed. Please install it using the following command pip install nerfacc.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        means2d: Gaussian means in 2D. [C, N, 2]</span>
-<span class="sd">        ray_transforms: transformation matrices that transform rays in pixel space into splat&#39;s local frame. [C, N, 3, 3]</span>
+<span class="sd">        ray_transforms: transformation matrices that transform rays in pixel space into splat's local frame. [C, N, 3, 3]</span>
 <span class="sd">        opacities: Per-view Gaussian opacities (for example, when antialiasing is enabled, Gaussian in</span>
 <span class="sd">            each view would efficiently have different opacity). [C, N]</span>
 <span class="sd">        colors: Per-view Gaussian colors. Supports N-D features. [C, N, channels]</span>
@@ -456,12 +456,12 @@
 <span class="sd">        - **renders**: Accumulated colors. [..., image_height, image_width, channels]</span>
 <span class="sd">        - **alphas**: Accumulated opacities. [..., image_height, image_width, 1]</span>
 <span class="sd">        - **normals**: Accumulated normals. [..., image_height, image_width, 3]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">try</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">nerfacc</span><span class="w"> </span><span class="kn">import</span> <span class="n">accumulate_along_rays</span><span class="p">,</span> <span class="n">render_weight_from_alpha</span>
     <span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="s2">&quot;Please install nerfacc package: pip install nerfacc&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="s2">"Please install nerfacc package: pip install nerfacc"</span><span class="p">)</span>
 
     <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">I</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">image_dims</span><span class="p">)</span>
@@ -539,7 +539,7 @@
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., channels]</span>
     <span class="n">batch_per_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels_2dgs()`.</span>
+<span class="w">    </span><span class="sd">"""Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels_2dgs()`.</span>
 
 <span class="sd">    This function rasterizes 2D Gaussians to pixels in a Pytorch-friendly way. It</span>
 <span class="sd">    iteratively accumulates the renderings within each batch of Gaussians. The</span>
@@ -551,7 +551,7 @@
 
 <span class="sd">    .. note::</span>
 
-<span class="sd">        This function relies on Pytorch&#39;s autograd for the backpropagation. It is much slower</span>
+<span class="sd">        This function relies on Pytorch's autograd for the backpropagation. It is much slower</span>
 <span class="sd">        than our fully fused rasterization implementation and comsumes much more GPU memory.</span>
 <span class="sd">        But it could serve as a playground for new ideas or debugging, as no backward</span>
 <span class="sd">        implementation is needed.</span>
@@ -560,7 +560,7 @@
 
 <span class="sd">        This function requires the `nerfacc` package to be installed. Please install it</span>
 <span class="sd">        using the following command `pip install nerfacc`.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">._wrapper</span><span class="w"> </span><span class="kn">import</span> <span class="n">rasterize_to_indices_in_range_2dgs</span>
 
     <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>

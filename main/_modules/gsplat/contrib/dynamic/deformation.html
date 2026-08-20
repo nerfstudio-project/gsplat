@@ -311,21 +311,21 @@
 <span></span><span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
-<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the "License");</span>
 <span class="c1"># you may not use this file except in compliance with the License.</span>
 <span class="c1"># You may obtain a copy of the License at</span>
 <span class="c1">#</span>
 <span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
-<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># distributed under the License is distributed on an "AS IS" BASIS,</span>
 <span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
 <span class="c1"># Portions of this file (DeformNetwork architecture, DeformationTable</span>
 <span class="c1"># bookkeeping) are ported from the G-SHARP v0.2 surgical reconstruction</span>
 <span class="c1"># application; see holohub/applications/surgical_scene_recon/training.</span>
-<span class="sd">&quot;&quot;&quot;Deformation network and per-Gaussian deformation table (experimental).</span>
+<span class="sd">"""Deformation network and per-Gaussian deformation table (experimental).</span>
 
 <span class="sd">Public API:</span>
 
@@ -343,7 +343,7 @@
 <span class="sd">- ``holohub/applications/surgical_scene_recon/training/scene/deformation.py``</span>
 <span class="sd">- ``_deformation_table`` / ``update_deformation_table_with_tool_masks`` in</span>
 <span class="sd">  ``holohub/applications/surgical_scene_recon/training/gsplat_train.py``</span>
-<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">"""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -353,13 +353,13 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch.nn</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nn</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
-<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;DeformNetwork&quot;</span><span class="p">,</span> <span class="s2">&quot;DeformationTable&quot;</span><span class="p">]</span>
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"DeformNetwork"</span><span class="p">,</span> <span class="s2">"DeformationTable"</span><span class="p">]</span>
 
 
 <div class="viewcode-block" id="DeformNetwork">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformNetwork">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">DeformNetwork</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;MLP head emitting per-Gaussian deltas on means / quats / opacities.</span>
+<span class="w">    </span><span class="sd">"""MLP head emitting per-Gaussian deltas on means / quats / opacities.</span>
 
 <span class="sd">    Architecture: a *num_layers*-deep ReLU trunk consuming</span>
 <span class="sd">    ``plane_features`` (typically the output of</span>
@@ -376,11 +376,11 @@
 
 <span class="sd">    Args:</span>
 <span class="sd">        feature_dim: Dimensionality of ``plane_features`` (must match</span>
-<span class="sd">            the producing :class:`HexPlaneField`&#39;s ``feat_dim``).</span>
+<span class="sd">            the producing :class:`HexPlaneField`'s ``feat_dim``).</span>
 <span class="sd">        hidden_dim: Trunk width. Default ``64``.</span>
 <span class="sd">        num_layers: Number of ``Linear + ReLU`` blocks in the trunk</span>
 <span class="sd">            (must be ``&gt;= 1``). Default ``3``.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -390,9 +390,9 @@
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
         <span class="k">if</span> <span class="n">num_layers</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;num_layers must be &gt;= 1, got </span><span class="si">{</span><span class="n">num_layers</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"num_layers must be &gt;= 1, got </span><span class="si">{</span><span class="n">num_layers</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">feature_dim</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;feature_dim must be &gt;= 1, got </span><span class="si">{</span><span class="n">feature_dim</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"feature_dim must be &gt;= 1, got </span><span class="si">{</span><span class="n">feature_dim</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">feature_dim</span> <span class="o">=</span> <span class="n">feature_dim</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">hidden_dim</span> <span class="o">=</span> <span class="n">hidden_dim</span>
@@ -423,7 +423,7 @@
         <span class="n">t</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># noqa: ARG002 — reserved for future time-aware extensions</span>
         <span class="n">plane_features</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply the per-Gaussian deformation deltas.</span>
+<span class="w">        </span><span class="sd">"""Apply the per-Gaussian deformation deltas.</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            means: ``(N, 3)`` Gaussian centres.</span>
@@ -444,7 +444,7 @@
 <span class="sd">        Raises:</span>
 <span class="sd">            ValueError: on batch-dim mismatch, plane-feature-dim mismatch,</span>
 <span class="sd">                or dtype mismatch among the four tensors.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">n</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">quats</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">n</span>
@@ -452,20 +452,20 @@
             <span class="ow">or</span> <span class="n">plane_features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">n</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;DeformNetwork: batch dim mismatch — means </span><span class="si">{</span><span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;quats </span><span class="si">{</span><span class="n">quats</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">, opacities </span><span class="si">{</span><span class="n">opacities</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;plane_features </span><span class="si">{</span><span class="n">plane_features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">"DeformNetwork: batch dim mismatch — means </span><span class="si">{</span><span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">, "</span>
+                <span class="sa">f</span><span class="s2">"quats </span><span class="si">{</span><span class="n">quats</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">, opacities </span><span class="si">{</span><span class="n">opacities</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">, "</span>
+                <span class="sa">f</span><span class="s2">"plane_features </span><span class="si">{</span><span class="n">plane_features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="n">plane_features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_dim</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;DeformNetwork: plane_features last dim &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">plane_features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> != feature_dim </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_dim</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">"DeformNetwork: plane_features last dim "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">plane_features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> != feature_dim </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_dim</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">means</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">quats</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">opacities</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">plane_features</span><span class="o">.</span><span class="n">dtype</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;DeformNetwork: dtype mismatch — means </span><span class="si">{</span><span class="n">means</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;quats </span><span class="si">{</span><span class="n">quats</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">, opacities </span><span class="si">{</span><span class="n">opacities</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;plane_features </span><span class="si">{</span><span class="n">plane_features</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">"DeformNetwork: dtype mismatch — means </span><span class="si">{</span><span class="n">means</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">, "</span>
+                <span class="sa">f</span><span class="s2">"quats </span><span class="si">{</span><span class="n">quats</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">, opacities </span><span class="si">{</span><span class="n">opacities</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">, "</span>
+                <span class="sa">f</span><span class="s2">"plane_features </span><span class="si">{</span><span class="n">plane_features</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
 
         <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">trunk</span><span class="p">(</span><span class="n">plane_features</span><span class="p">)</span>
@@ -481,7 +481,7 @@
 <div class="viewcode-block" id="DeformationTable">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">DeformationTable</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Per-Gaussian boolean table marking which Gaussians are dynamic.</span>
+<span class="w">    </span><span class="sd">"""Per-Gaussian boolean table marking which Gaussians are dynamic.</span>
 
 <span class="sd">    Used by :class:`gsplat.contrib.dynamic.DynamicStrategy` to decide which</span>
 <span class="sd">    Gaussians get fed through :class:`DeformNetwork` each step. Resize</span>
@@ -494,14 +494,14 @@
 <span class="sd">    Args:</span>
 <span class="sd">        num_gaussians: Initial Gaussian count.</span>
 <span class="sd">        device: Optional device (defaults to CPU).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">num_gaussians</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">num_gaussians</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;DeformationTable: num_gaussians must be &gt;= 0, got </span><span class="si">{</span><span class="n">num_gaussians</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">"DeformationTable: num_gaussians must be &gt;= 0, got </span><span class="si">{</span><span class="n">num_gaussians</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">mask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">num_gaussians</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bool</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
@@ -511,23 +511,23 @@
 <div class="viewcode-block" id="DeformationTable.set_indices">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable.set_indices">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">set_indices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">indices</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Mark the given Gaussian indices as dynamic (or static if *value* is False).&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Mark the given Gaussian indices as dynamic (or static if *value* is False)."""</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="p">[</span><span class="n">indices</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span></div>
 
 
 <div class="viewcode-block" id="DeformationTable.prune">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable.prune">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">prune</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">keep_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Drop Gaussians where *keep_mask* is False (DefaultStrategy prune op).</span>
+<span class="w">        </span><span class="sd">"""Drop Gaussians where *keep_mask* is False (DefaultStrategy prune op).</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            keep_mask: ``(N,)`` bool tensor with ``True`` for surviving</span>
 <span class="sd">                Gaussians. Length must equal current table size.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">if</span> <span class="n">keep_mask</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;DeformationTable.prune: keep_mask shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">keep_mask</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2"> &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;!= table shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">"DeformationTable.prune: keep_mask shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">keep_mask</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2"> "</span>
+                <span class="sa">f</span><span class="s2">"!= table shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">mask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="p">[</span><span class="n">keep_mask</span><span class="p">]</span></div>
 
@@ -535,30 +535,30 @@
 <div class="viewcode-block" id="DeformationTable.duplicate">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable.duplicate">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">duplicate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">indices</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Append duplicates of the given indices (DefaultStrategy duplicate op).</span>
+<span class="w">        </span><span class="sd">"""Append duplicates of the given indices (DefaultStrategy duplicate op).</span>
 
 <span class="sd">        Originals stay; one duplicate is appended per index, inheriting</span>
-<span class="sd">        the parent&#39;s dynamic flag.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        the parent's dynamic flag.</span>
+<span class="sd">        """</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">mask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="p">[</span><span class="n">indices</span><span class="p">]],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="DeformationTable.split">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable.split">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">split</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">indices</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">factor</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Replace each index with *factor* children (DefaultStrategy split op).</span>
+<span class="w">        </span><span class="sd">"""Replace each index with *factor* children (DefaultStrategy split op).</span>
 
 <span class="sd">        Original indices are removed; ``factor`` children are appended per</span>
-<span class="sd">        split index, each inheriting the parent&#39;s dynamic flag.</span>
+<span class="sd">        split index, each inheriting the parent's dynamic flag.</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            indices: ``(S,)`` indices to split.</span>
 <span class="sd">            factor: Children per split. Default ``2`` (matches the gsplat</span>
 <span class="sd">                ``DefaultStrategy`` convention).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">if</span> <span class="n">factor</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;DeformationTable.split: factor must be &gt;= 1, got </span><span class="si">{</span><span class="n">factor</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">"DeformationTable.split: factor must be &gt;= 1, got </span><span class="si">{</span><span class="n">factor</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
         <span class="n">keep</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bool</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">mask</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
         <span class="n">keep</span><span class="p">[</span><span class="n">indices</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>

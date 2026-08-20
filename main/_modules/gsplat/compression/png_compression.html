@@ -311,14 +311,14 @@
 <span></span><span class="c1"># SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
-<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the "License");</span>
 <span class="c1"># you may not use this file except in compliance with the License.</span>
 <span class="c1"># You may obtain a copy of the License at</span>
 <span class="c1">#</span>
 <span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
-<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># distributed under the License is distributed on an "AS IS" BASIS,</span>
 <span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
@@ -341,7 +341,7 @@
 <a class="viewcode-back" href="../../../apis/compression.html#gsplat.PngCompression">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">PngCompression</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Uses quantization and sorting to compress splats into PNG files and uses</span>
+<span class="w">    </span><span class="sd">"""Uses quantization and sorting to compress splats into PNG files and uses</span>
 <span class="sd">    K-means clustering to compress the spherical harmonic coefficents.</span>
 
 <span class="sd">    .. warning::</span>
@@ -355,8 +355,8 @@
 
 <span class="sd">    .. note::</span>
 <span class="sd">        The splats parameters are expected to be pre-activation values. It expects</span>
-<span class="sd">        the following fields in the splats dictionary: &quot;means&quot;, &quot;scales&quot;, &quot;quats&quot;,</span>
-<span class="sd">        &quot;opacities&quot;, &quot;sh0&quot;, &quot;shN&quot;. More fields can be added to the dictionary, but</span>
+<span class="sd">        the following fields in the splats dictionary: "means", "scales", "quats",</span>
+<span class="sd">        "opacities", "sh0", "shN". More fields can be added to the dictionary, but</span>
 <span class="sd">        they will only be compressed using NPZ compression.</span>
 
 <span class="sd">    References:</span>
@@ -366,19 +366,19 @@
 <span class="sd">    Args:</span>
 <span class="sd">        use_sort (bool, optional): Whether to sort splats before compression. Defaults to True.</span>
 <span class="sd">        verbose (bool, optional): Whether to print verbose information. Default to True.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">use_sort</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_get_compress_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
         <span class="n">compress_fn_map</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;means&quot;</span><span class="p">:</span> <span class="n">_compress_png_16bit</span><span class="p">,</span>
-            <span class="s2">&quot;scales&quot;</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
-            <span class="s2">&quot;quats&quot;</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
-            <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
-            <span class="s2">&quot;sh0&quot;</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
-            <span class="s2">&quot;shN&quot;</span><span class="p">:</span> <span class="n">_compress_kmeans</span><span class="p">,</span>
+            <span class="s2">"means"</span><span class="p">:</span> <span class="n">_compress_png_16bit</span><span class="p">,</span>
+            <span class="s2">"scales"</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
+            <span class="s2">"quats"</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
+            <span class="s2">"opacities"</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
+            <span class="s2">"sh0"</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
+            <span class="s2">"shN"</span><span class="p">:</span> <span class="n">_compress_kmeans</span><span class="p">,</span>
         <span class="p">}</span>
         <span class="k">if</span> <span class="n">param_name</span> <span class="ow">in</span> <span class="n">compress_fn_map</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">compress_fn_map</span><span class="p">[</span><span class="n">param_name</span><span class="p">]</span>
@@ -387,12 +387,12 @@
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_get_decompress_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
         <span class="n">decompress_fn_map</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;means&quot;</span><span class="p">:</span> <span class="n">_decompress_png_16bit</span><span class="p">,</span>
-            <span class="s2">&quot;scales&quot;</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
-            <span class="s2">&quot;quats&quot;</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
-            <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
-            <span class="s2">&quot;sh0&quot;</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
-            <span class="s2">&quot;shN&quot;</span><span class="p">:</span> <span class="n">_decompress_kmeans</span><span class="p">,</span>
+            <span class="s2">"means"</span><span class="p">:</span> <span class="n">_decompress_png_16bit</span><span class="p">,</span>
+            <span class="s2">"scales"</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
+            <span class="s2">"quats"</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
+            <span class="s2">"opacities"</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
+            <span class="s2">"sh0"</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
+            <span class="s2">"shN"</span><span class="p">:</span> <span class="n">_decompress_kmeans</span><span class="p">,</span>
         <span class="p">}</span>
         <span class="k">if</span> <span class="n">param_name</span> <span class="ow">in</span> <span class="n">decompress_fn_map</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">decompress_fn_map</span><span class="p">[</span><span class="n">param_name</span><span class="p">]</span>
@@ -402,24 +402,24 @@
 <div class="viewcode-block" id="PngCompression.compress">
 <a class="viewcode-back" href="../../../apis/compression.html#gsplat.PngCompression.compress">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">compress</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run compression</span>
+<span class="w">        </span><span class="sd">"""Run compression</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            compress_dir (str): directory to save compressed files</span>
 <span class="sd">            splats (Dict[str, Tensor]): Gaussian splats to compress</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
 
         <span class="c1"># Param-specific preprocessing</span>
-        <span class="n">splats</span><span class="p">[</span><span class="s2">&quot;means&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">log_transform</span><span class="p">(</span><span class="n">splats</span><span class="p">[</span><span class="s2">&quot;means&quot;</span><span class="p">])</span>
-        <span class="n">splats</span><span class="p">[</span><span class="s2">&quot;quats&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">normalize</span><span class="p">(</span><span class="n">splats</span><span class="p">[</span><span class="s2">&quot;quats&quot;</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">splats</span><span class="p">[</span><span class="s2">"means"</span><span class="p">]</span> <span class="o">=</span> <span class="n">log_transform</span><span class="p">(</span><span class="n">splats</span><span class="p">[</span><span class="s2">"means"</span><span class="p">])</span>
+        <span class="n">splats</span><span class="p">[</span><span class="s2">"quats"</span><span class="p">]</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">normalize</span><span class="p">(</span><span class="n">splats</span><span class="p">[</span><span class="s2">"quats"</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
 
-        <span class="n">n_gs</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">splats</span><span class="p">[</span><span class="s2">&quot;means&quot;</span><span class="p">])</span>
+        <span class="n">n_gs</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">splats</span><span class="p">[</span><span class="s2">"means"</span><span class="p">])</span>
         <span class="n">n_sidelen</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_gs</span><span class="o">**</span><span class="mf">0.5</span><span class="p">)</span>
         <span class="n">n_crop</span> <span class="o">=</span> <span class="n">n_gs</span> <span class="o">-</span> <span class="n">n_sidelen</span><span class="o">**</span><span class="mi">2</span>
         <span class="k">if</span> <span class="n">n_crop</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
             <span class="n">splats</span> <span class="o">=</span> <span class="n">_crop_n_splats</span><span class="p">(</span><span class="n">splats</span><span class="p">,</span> <span class="n">n_crop</span><span class="p">)</span>
             <span class="nb">print</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Warning: Number of Gaussians was not square. Removed </span><span class="si">{</span><span class="n">n_crop</span><span class="si">}</span><span class="s2"> Gaussians.&quot;</span>
+                <span class="sa">f</span><span class="s2">"Warning: Number of Gaussians was not square. Removed </span><span class="si">{</span><span class="n">n_crop</span><span class="si">}</span><span class="s2"> Gaussians."</span>
             <span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_sort</span><span class="p">:</span>
@@ -429,29 +429,29 @@
         <span class="k">for</span> <span class="n">param_name</span> <span class="ow">in</span> <span class="n">splats</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
             <span class="n">compress_fn</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_compress_fn</span><span class="p">(</span><span class="n">param_name</span><span class="p">)</span>
             <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="s2">&quot;n_sidelen&quot;</span><span class="p">:</span> <span class="n">n_sidelen</span><span class="p">,</span>
-                <span class="s2">&quot;verbose&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">verbose</span><span class="p">,</span>
+                <span class="s2">"n_sidelen"</span><span class="p">:</span> <span class="n">n_sidelen</span><span class="p">,</span>
+                <span class="s2">"verbose"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">verbose</span><span class="p">,</span>
             <span class="p">}</span>
             <span class="n">meta</span><span class="p">[</span><span class="n">param_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">compress_fn</span><span class="p">(</span>
                 <span class="n">compress_dir</span><span class="p">,</span> <span class="n">param_name</span><span class="p">,</span> <span class="n">splats</span><span class="p">[</span><span class="n">param_name</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span>
             <span class="p">)</span>
 
-        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="s2">&quot;meta.json&quot;</span><span class="p">),</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="s2">"meta.json"</span><span class="p">),</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">meta</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="PngCompression.decompress">
 <a class="viewcode-back" href="../../../apis/compression.html#gsplat.PngCompression.decompress">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">decompress</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run decompression</span>
+<span class="w">        </span><span class="sd">"""Run decompression</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            compress_dir (str): directory that contains compressed files</span>
 
 <span class="sd">        Returns:</span>
 <span class="sd">            Dict[str, Tensor]: decompressed Gaussian splats</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="s2">&quot;meta.json&quot;</span><span class="p">),</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+<span class="sd">        """</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="s2">"meta.json"</span><span class="p">),</span> <span class="s2">"r"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">meta</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
 
         <span class="n">splats</span> <span class="o">=</span> <span class="p">{}</span>
@@ -460,14 +460,14 @@
             <span class="n">splats</span><span class="p">[</span><span class="n">param_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">decompress_fn</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="n">param_name</span><span class="p">,</span> <span class="n">param_meta</span><span class="p">)</span>
 
         <span class="c1"># Param-specific postprocessing</span>
-        <span class="n">splats</span><span class="p">[</span><span class="s2">&quot;means&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">inverse_log_transform</span><span class="p">(</span><span class="n">splats</span><span class="p">[</span><span class="s2">&quot;means&quot;</span><span class="p">])</span>
+        <span class="n">splats</span><span class="p">[</span><span class="s2">"means"</span><span class="p">]</span> <span class="o">=</span> <span class="n">inverse_log_transform</span><span class="p">(</span><span class="n">splats</span><span class="p">[</span><span class="s2">"means"</span><span class="p">])</span>
         <span class="k">return</span> <span class="n">splats</span></div>
 </div>
 
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_crop_n_splats</span><span class="p">(</span><span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">n_crop</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-    <span class="n">opacities</span> <span class="o">=</span> <span class="n">splats</span><span class="p">[</span><span class="s2">&quot;opacities&quot;</span><span class="p">]</span>
+    <span class="n">opacities</span> <span class="o">=</span> <span class="n">splats</span><span class="p">[</span><span class="s2">"opacities"</span><span class="p">]</span>
     <span class="n">keep_indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="n">opacities</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)[:</span><span class="o">-</span><span class="n">n_crop</span><span class="p">]</span>
     <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">splats</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
         <span class="n">splats</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span><span class="p">[</span><span class="n">keep_indices</span><span class="p">]</span>
@@ -477,7 +477,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_compress_png</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">n_sidelen</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compress parameters with 8-bit quantization and lossless PNG compression.</span>
+<span class="w">    </span><span class="sd">"""Compress parameters with 8-bit quantization and lossless PNG compression.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        compress_dir (str): compression directory</span>
@@ -487,13 +487,13 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Dict[str, Any]: metadata</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
 
     <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">numel</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
-            <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
+            <span class="s2">"shape"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+            <span class="s2">"dtype"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
         <span class="p">}</span>
         <span class="k">return</span> <span class="n">meta</span>
 
@@ -505,19 +505,19 @@
 
     <span class="n">img</span> <span class="o">=</span> <span class="p">(</span><span class="n">img_norm</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">8</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">round</span><span class="p">()</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
     <span class="n">img</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">squeeze</span><span class="p">()</span>
-    <span class="n">imageio</span><span class="o">.</span><span class="n">imwrite</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.png&quot;</span><span class="p">),</span> <span class="n">img</span><span class="p">)</span>
+    <span class="n">imageio</span><span class="o">.</span><span class="n">imwrite</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.png"</span><span class="p">),</span> <span class="n">img</span><span class="p">)</span>
 
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
-        <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
-        <span class="s2">&quot;mins&quot;</span><span class="p">:</span> <span class="n">mins</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-        <span class="s2">&quot;maxs&quot;</span><span class="p">:</span> <span class="n">maxs</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="s2">"shape"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+        <span class="s2">"dtype"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
+        <span class="s2">"mins"</span><span class="p">:</span> <span class="n">mins</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="s2">"maxs"</span><span class="p">:</span> <span class="n">maxs</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
     <span class="p">}</span>
     <span class="k">return</span> <span class="n">meta</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_decompress_png</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Decompress parameters from PNG file.</span>
+<span class="w">    </span><span class="sd">"""Decompress parameters from PNG file.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        compress_dir (str): compression directory</span>
@@ -526,30 +526,30 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Tensor: parameters</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
 
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">]):</span>
-        <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">]):</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"dtype"</span><span class="p">]))</span>
         <span class="k">return</span> <span class="n">meta</span>
 
-    <span class="n">img</span> <span class="o">=</span> <span class="n">imageio</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.png&quot;</span><span class="p">))</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">imageio</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.png"</span><span class="p">))</span>
     <span class="n">img_norm</span> <span class="o">=</span> <span class="n">img</span> <span class="o">/</span> <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">8</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
 
     <span class="n">grid_norm</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">img_norm</span><span class="p">)</span>
-    <span class="n">mins</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;mins&quot;</span><span class="p">])</span>
-    <span class="n">maxs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;maxs&quot;</span><span class="p">])</span>
+    <span class="n">mins</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"mins"</span><span class="p">])</span>
+    <span class="n">maxs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"maxs"</span><span class="p">])</span>
     <span class="n">grid</span> <span class="o">=</span> <span class="n">grid_norm</span> <span class="o">*</span> <span class="p">(</span><span class="n">maxs</span> <span class="o">-</span> <span class="n">mins</span><span class="p">)</span> <span class="o">+</span> <span class="n">mins</span>
 
-    <span class="n">params</span> <span class="o">=</span> <span class="n">grid</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">])</span>
-    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">grid</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">])</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"dtype"</span><span class="p">]))</span>
     <span class="k">return</span> <span class="n">params</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_compress_png_16bit</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">n_sidelen</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compress parameters with 16-bit quantization and PNG compression.</span>
+<span class="w">    </span><span class="sd">"""Compress parameters with 16-bit quantization and PNG compression.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        compress_dir (str): compression directory</span>
@@ -559,13 +559,13 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Dict[str, Any]: metadata</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
 
     <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">numel</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
-            <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
+            <span class="s2">"shape"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+            <span class="s2">"dtype"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
         <span class="p">}</span>
         <span class="k">return</span> <span class="n">meta</span>
 
@@ -579,17 +579,17 @@
     <span class="n">img_l</span> <span class="o">=</span> <span class="n">img</span> <span class="o">&amp;</span> <span class="mh">0xFF</span>
     <span class="n">img_u</span> <span class="o">=</span> <span class="p">(</span><span class="n">img</span> <span class="o">&gt;&gt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span>
     <span class="n">imageio</span><span class="o">.</span><span class="n">imwrite</span><span class="p">(</span>
-        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">_l.png&quot;</span><span class="p">),</span> <span class="n">img_l</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">_l.png"</span><span class="p">),</span> <span class="n">img_l</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
     <span class="p">)</span>
     <span class="n">imageio</span><span class="o">.</span><span class="n">imwrite</span><span class="p">(</span>
-        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">_u.png&quot;</span><span class="p">),</span> <span class="n">img_u</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">_u.png"</span><span class="p">),</span> <span class="n">img_u</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
     <span class="p">)</span>
 
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
-        <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
-        <span class="s2">&quot;mins&quot;</span><span class="p">:</span> <span class="n">mins</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-        <span class="s2">&quot;maxs&quot;</span><span class="p">:</span> <span class="n">maxs</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="s2">"shape"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+        <span class="s2">"dtype"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
+        <span class="s2">"mins"</span><span class="p">:</span> <span class="n">mins</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="s2">"maxs"</span><span class="p">:</span> <span class="n">maxs</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
     <span class="p">}</span>
     <span class="k">return</span> <span class="n">meta</span>
 
@@ -597,7 +597,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_decompress_png_16bit</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Decompress parameters from PNG files.</span>
+<span class="w">    </span><span class="sd">"""Decompress parameters from PNG files.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        compress_dir (str): compression directory</span>
@@ -606,50 +606,50 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Tensor: parameters</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
 
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">]):</span>
-        <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">]):</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"dtype"</span><span class="p">]))</span>
         <span class="k">return</span> <span class="n">meta</span>
 
-    <span class="n">img_l</span> <span class="o">=</span> <span class="n">imageio</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">_l.png&quot;</span><span class="p">))</span>
-    <span class="n">img_u</span> <span class="o">=</span> <span class="n">imageio</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">_u.png&quot;</span><span class="p">))</span>
+    <span class="n">img_l</span> <span class="o">=</span> <span class="n">imageio</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">_l.png"</span><span class="p">))</span>
+    <span class="n">img_u</span> <span class="o">=</span> <span class="n">imageio</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">_u.png"</span><span class="p">))</span>
     <span class="n">img_u</span> <span class="o">=</span> <span class="n">img_u</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint16</span><span class="p">)</span>
     <span class="n">img</span> <span class="o">=</span> <span class="p">(</span><span class="n">img_u</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">+</span> <span class="n">img_l</span>
 
     <span class="n">img_norm</span> <span class="o">=</span> <span class="n">img</span> <span class="o">/</span> <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">16</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
     <span class="n">grid_norm</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">img_norm</span><span class="p">)</span>
-    <span class="n">mins</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;mins&quot;</span><span class="p">])</span>
-    <span class="n">maxs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;maxs&quot;</span><span class="p">])</span>
+    <span class="n">mins</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"mins"</span><span class="p">])</span>
+    <span class="n">maxs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"maxs"</span><span class="p">])</span>
     <span class="n">grid</span> <span class="o">=</span> <span class="n">grid_norm</span> <span class="o">*</span> <span class="p">(</span><span class="n">maxs</span> <span class="o">-</span> <span class="n">mins</span><span class="p">)</span> <span class="o">+</span> <span class="n">mins</span>
 
-    <span class="n">params</span> <span class="o">=</span> <span class="n">grid</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">])</span>
-    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">grid</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">])</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"dtype"</span><span class="p">]))</span>
     <span class="k">return</span> <span class="n">params</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_compress_npz</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compress parameters with numpy&#39;s NPZ compression.&quot;&quot;&quot;</span>
-    <span class="n">npz_dict</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;arr&quot;</span><span class="p">:</span> <span class="n">params</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()}</span>
-    <span class="n">save_fp</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="sd">"""Compress parameters with numpy's NPZ compression."""</span>
+    <span class="n">npz_dict</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"arr"</span><span class="p">:</span> <span class="n">params</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()}</span>
+    <span class="n">save_fp</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz"</span><span class="p">)</span>
     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">save_fp</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
     <span class="n">np</span><span class="o">.</span><span class="n">savez_compressed</span><span class="p">(</span><span class="n">save_fp</span><span class="p">,</span> <span class="o">**</span><span class="n">npz_dict</span><span class="p">)</span>
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
-        <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
+        <span class="s2">"shape"</span><span class="p">:</span> <span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+        <span class="s2">"dtype"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
     <span class="p">}</span>
     <span class="k">return</span> <span class="n">meta</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_decompress_npz</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Decompress parameters with numpy&#39;s NPZ compression.&quot;&quot;&quot;</span>
-    <span class="n">arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz&quot;</span><span class="p">))[</span><span class="s2">&quot;arr&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="sd">"""Decompress parameters with numpy's NPZ compression."""</span>
+    <span class="n">arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz"</span><span class="p">))[</span><span class="s2">"arr"</span><span class="p">]</span>
     <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">arr</span><span class="p">)</span>
-    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">])</span>
-    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">])</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"dtype"</span><span class="p">]))</span>
     <span class="k">return</span> <span class="n">params</span>
 
 
@@ -663,7 +663,7 @@
     <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run K-means clustering on parameters and save centroids and labels to a npz file.</span>
+<span class="w">    </span><span class="sd">"""Run K-means clustering on parameters and save centroids and labels to a npz file.</span>
 
 <span class="sd">    .. warning::</span>
 <span class="sd">        TorchPQ must installed to use K-means clustering.</span>
@@ -679,22 +679,22 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Dict[str, Any]: metadata</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">torchpq.clustering</span><span class="w"> </span><span class="kn">import</span> <span class="n">KMeans</span>
     <span class="k">except</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
-            <span class="s2">&quot;Please install extra dependencies with &#39;pip install torchpq cupy&#39; to use K-means clustering&quot;</span>
+            <span class="s2">"Please install extra dependencies with 'pip install torchpq cupy' to use K-means clustering"</span>
         <span class="p">)</span>
 
     <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">numel</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
-            <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
+            <span class="s2">"shape"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+            <span class="s2">"dtype"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
         <span class="p">}</span>
         <span class="k">return</span> <span class="n">meta</span>
 
-    <span class="n">kmeans</span> <span class="o">=</span> <span class="n">KMeans</span><span class="p">(</span><span class="n">n_clusters</span><span class="o">=</span><span class="n">n_clusters</span><span class="p">,</span> <span class="n">distance</span><span class="o">=</span><span class="s2">&quot;manhattan&quot;</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="n">verbose</span><span class="p">)</span>
+    <span class="n">kmeans</span> <span class="o">=</span> <span class="n">KMeans</span><span class="p">(</span><span class="n">n_clusters</span><span class="o">=</span><span class="n">n_clusters</span><span class="p">,</span> <span class="n">distance</span><span class="o">=</span><span class="s2">"manhattan"</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="n">verbose</span><span class="p">)</span>
     <span class="n">x</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">labels</span> <span class="o">=</span> <span class="n">kmeans</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
     <span class="n">labels</span> <span class="o">=</span> <span class="n">labels</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
@@ -710,16 +710,16 @@
     <span class="n">labels</span> <span class="o">=</span> <span class="n">labels</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint16</span><span class="p">)</span>
 
     <span class="n">npz_dict</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;centroids&quot;</span><span class="p">:</span> <span class="n">centroids_quant</span><span class="p">,</span>
-        <span class="s2">&quot;labels&quot;</span><span class="p">:</span> <span class="n">labels</span><span class="p">,</span>
+        <span class="s2">"centroids"</span><span class="p">:</span> <span class="n">centroids_quant</span><span class="p">,</span>
+        <span class="s2">"labels"</span><span class="p">:</span> <span class="n">labels</span><span class="p">,</span>
     <span class="p">}</span>
-    <span class="n">np</span><span class="o">.</span><span class="n">savez_compressed</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz&quot;</span><span class="p">),</span> <span class="o">**</span><span class="n">npz_dict</span><span class="p">)</span>
+    <span class="n">np</span><span class="o">.</span><span class="n">savez_compressed</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz"</span><span class="p">),</span> <span class="o">**</span><span class="n">npz_dict</span><span class="p">)</span>
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
-        <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
-        <span class="s2">&quot;mins&quot;</span><span class="p">:</span> <span class="n">mins</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-        <span class="s2">&quot;maxs&quot;</span><span class="p">:</span> <span class="n">maxs</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-        <span class="s2">&quot;quantization&quot;</span><span class="p">:</span> <span class="n">quantization</span><span class="p">,</span>
+        <span class="s2">"shape"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+        <span class="s2">"dtype"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="mi">1</span><span class="p">],</span>
+        <span class="s2">"mins"</span><span class="p">:</span> <span class="n">mins</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="s2">"maxs"</span><span class="p">:</span> <span class="n">maxs</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
+        <span class="s2">"quantization"</span><span class="p">:</span> <span class="n">quantization</span><span class="p">,</span>
     <span class="p">}</span>
     <span class="k">return</span> <span class="n">meta</span>
 
@@ -727,7 +727,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_decompress_kmeans</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Decompress parameters from K-means compression.</span>
+<span class="w">    </span><span class="sd">"""Decompress parameters from K-means compression.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        compress_dir (str): compression directory</span>
@@ -736,24 +736,24 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Tensor: parameters</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">]):</span>
-        <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">]):</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"dtype"</span><span class="p">]))</span>
         <span class="k">return</span> <span class="n">meta</span>
 
-    <span class="n">npz_dict</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz&quot;</span><span class="p">))</span>
-    <span class="n">centroids_quant</span> <span class="o">=</span> <span class="n">npz_dict</span><span class="p">[</span><span class="s2">&quot;centroids&quot;</span><span class="p">]</span>
-    <span class="n">labels</span> <span class="o">=</span> <span class="n">npz_dict</span><span class="p">[</span><span class="s2">&quot;labels&quot;</span><span class="p">]</span>
+    <span class="n">npz_dict</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz"</span><span class="p">))</span>
+    <span class="n">centroids_quant</span> <span class="o">=</span> <span class="n">npz_dict</span><span class="p">[</span><span class="s2">"centroids"</span><span class="p">]</span>
+    <span class="n">labels</span> <span class="o">=</span> <span class="n">npz_dict</span><span class="p">[</span><span class="s2">"labels"</span><span class="p">]</span>
 
-    <span class="n">centroids_norm</span> <span class="o">=</span> <span class="n">centroids_quant</span> <span class="o">/</span> <span class="p">(</span><span class="mi">2</span> <span class="o">**</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;quantization&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">centroids_norm</span> <span class="o">=</span> <span class="n">centroids_quant</span> <span class="o">/</span> <span class="p">(</span><span class="mi">2</span> <span class="o">**</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"quantization"</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
     <span class="n">centroids_norm</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">centroids_norm</span><span class="p">)</span>
-    <span class="n">mins</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;mins&quot;</span><span class="p">])</span>
-    <span class="n">maxs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;maxs&quot;</span><span class="p">])</span>
+    <span class="n">mins</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"mins"</span><span class="p">])</span>
+    <span class="n">maxs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"maxs"</span><span class="p">])</span>
     <span class="n">centroids</span> <span class="o">=</span> <span class="n">centroids_norm</span> <span class="o">*</span> <span class="p">(</span><span class="n">maxs</span> <span class="o">-</span> <span class="n">mins</span><span class="p">)</span> <span class="o">+</span> <span class="n">mins</span>
 
     <span class="n">params</span> <span class="o">=</span> <span class="n">centroids</span><span class="p">[</span><span class="n">labels</span><span class="p">]</span>
-    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">])</span>
-    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">])</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"dtype"</span><span class="p">]))</span>
     <span class="k">return</span> <span class="n">params</span>
 </pre></div>
         </article>

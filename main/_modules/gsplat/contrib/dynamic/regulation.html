@@ -311,20 +311,20 @@
 <span></span><span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
-<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the "License");</span>
 <span class="c1"># you may not use this file except in compliance with the License.</span>
 <span class="c1"># You may obtain a copy of the License at</span>
 <span class="c1">#</span>
 <span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
-<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># distributed under the License is distributed on an "AS IS" BASIS,</span>
 <span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
-<span class="sd">&quot;&quot;&quot;HexPlane regularizers (experimental).</span>
+<span class="sd">"""HexPlane regularizers (experimental).</span>
 
-<span class="sd">Three regularizers ported from G-SHARP v0.2&#39;s</span>
+<span class="sd">Three regularizers ported from G-SHARP v0.2's</span>
 <span class="sd">``training/scene/regulation.py``. They operate on lists of feature-plane</span>
 <span class="sd">tensors of shape ``(B, C, H, W)`` — typically the per-scale</span>
 <span class="sd">:class:`gsplat.contrib.dynamic.HexPlaneField` planes.</span>
@@ -341,7 +341,7 @@
 
 <span class="sd">Caller selects which planes go where; these functions just iterate the</span>
 <span class="sd">input list and sum the result.</span>
-<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">"""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -351,25 +351,25 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
 <span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
-    <span class="s2">&quot;plane_smoothness&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;time_smoothness&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;time_l1&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;hexplane_regularization&quot;</span><span class="p">,</span>
+    <span class="s2">"plane_smoothness"</span><span class="p">,</span>
+    <span class="s2">"time_smoothness"</span><span class="p">,</span>
+    <span class="s2">"time_l1"</span><span class="p">,</span>
+    <span class="s2">"hexplane_regularization"</span><span class="p">,</span>
 <span class="p">]</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_second_difference_squared</span><span class="p">(</span><span class="n">planes</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Mean squared second-difference along the H axis, summed across planes.</span>
+<span class="w">    </span><span class="sd">"""Mean squared second-difference along the H axis, summed across planes.</span>
 
 <span class="sd">    Ports ``compute_plane_smoothness`` from</span>
 <span class="sd">    ``training/scene/regulation.py:45`` in the G-SHARP source.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">total</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">planes</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">4</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Expected 4D plane tensors (B, C, H, W); got </span><span class="si">{</span><span class="n">p</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">D &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">"Expected 4D plane tensors (B, C, H, W); got </span><span class="si">{</span><span class="n">p</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">D "</span>
+                <span class="sa">f</span><span class="s2">"shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">:</span>
             <span class="k">continue</span>
@@ -388,7 +388,7 @@
 <div class="viewcode-block" id="plane_smoothness">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.regulation.plane_smoothness">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">plane_smoothness</span><span class="p">(</span><span class="n">planes</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Spatial 2D smoothness — sum of mean squared second-difference along H.</span>
+<span class="w">    </span><span class="sd">"""Spatial 2D smoothness — sum of mean squared second-difference along H.</span>
 
 <span class="sd">    Pass the *spatial* HexPlane planes (combo indices ``[0, 1, 3]`` of a</span>
 <span class="sd">    4D HexPlane: ``xy``, ``xz``, ``yz``) for the spatial-smoothness</span>
@@ -399,7 +399,7 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Scalar tensor (sum across planes; mean within each plane).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">return</span> <span class="n">_second_difference_squared</span><span class="p">(</span><span class="n">planes</span><span class="p">)</span></div>
 
 
@@ -407,7 +407,7 @@
 <div class="viewcode-block" id="time_smoothness">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.regulation.time_smoothness">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">time_smoothness</span><span class="p">(</span><span class="n">planes</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Temporal smoothness — same math as :func:`plane_smoothness`.</span>
+<span class="w">    </span><span class="sd">"""Temporal smoothness — same math as :func:`plane_smoothness`.</span>
 
 <span class="sd">    Pass the *spatio-temporal* HexPlane planes (combo indices</span>
 <span class="sd">    ``[2, 4, 5]`` of a 4D HexPlane: ``xt``, ``yt``, ``zt``). For these</span>
@@ -420,7 +420,7 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Scalar tensor.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">return</span> <span class="n">_second_difference_squared</span><span class="p">(</span><span class="n">planes</span><span class="p">)</span></div>
 
 
@@ -428,19 +428,19 @@
 <div class="viewcode-block" id="time_l1">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.regulation.time_l1">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">time_l1</span><span class="p">(</span><span class="n">planes</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;L1 deviation from 1.0 on spatio-temporal planes.</span>
+<span class="w">    </span><span class="sd">"""L1 deviation from 1.0 on spatio-temporal planes.</span>
 
 <span class="sd">    HexPlane spatio-temporal planes are initialised to 1.0 so deformation</span>
 <span class="sd">    starts identity-like. ``time_l1`` penalises their deviation from 1.0,</span>
 <span class="sd">    encouraging static tissue to keep an identity (no-time-deformation)</span>
-<span class="sd">    response. Matches G-SHARP&#39;s ``L1TimePlanes`` regularizer.</span>
+<span class="sd">    response. Matches G-SHARP's ``L1TimePlanes`` regularizer.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        planes: Iterable of plane tensors (any shape with ``mean()``).</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Scalar L1 deviation summed across planes (mean within each plane).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">total</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">planes</span><span class="p">:</span>
         <span class="n">contribution</span> <span class="o">=</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">p</span><span class="p">)</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
@@ -457,13 +457,13 @@
 <div class="viewcode-block" id="hexplane_regularization">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.regulation.hexplane_regularization">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">hexplane_regularization</span><span class="p">(</span>
-    <span class="n">field</span><span class="p">:</span> <span class="s2">&quot;HexPlaneField&quot;</span><span class="p">,</span>
+    <span class="n">field</span><span class="p">:</span> <span class="s2">"HexPlaneField"</span><span class="p">,</span>
     <span class="n">lambda_plane_smooth</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
     <span class="n">lambda_time_smooth</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
     <span class="n">lambda_time_l1</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convenience wrapper: applies the three HexPlane regularizers using the</span>
-<span class="sd">    field&#39;s own spatial / temporal plane accessors.</span>
+<span class="w">    </span><span class="sd">"""Convenience wrapper: applies the three HexPlane regularizers using the</span>
+<span class="sd">    field's own spatial / temporal plane accessors.</span>
 
 <span class="sd">    Use this instead of calling :func:`plane_smoothness`,</span>
 <span class="sd">    :func:`time_smoothness`, :func:`time_l1` with hand-partitioned plane</span>
@@ -480,7 +480,7 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Scalar tensor — weighted sum of the three regularizers.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">spatial</span> <span class="o">=</span> <span class="n">field</span><span class="o">.</span><span class="n">spatial_planes</span><span class="p">()</span>
     <span class="n">temporal</span> <span class="o">=</span> <span class="n">field</span><span class="o">.</span><span class="n">temporal_planes</span><span class="p">()</span>
     <span class="k">return</span> <span class="p">(</span>

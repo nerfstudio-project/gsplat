@@ -311,18 +311,18 @@
 <span></span><span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
-<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the "License");</span>
 <span class="c1"># you may not use this file except in compliance with the License.</span>
 <span class="c1"># You may obtain a copy of the License at</span>
 <span class="c1">#</span>
 <span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
-<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># distributed under the License is distributed on an "AS IS" BASIS,</span>
 <span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
-<span class="sd">&quot;&quot;&quot;DynamicStrategy — deformable extension of :class:`DefaultStrategy`.</span>
+<span class="sd">"""DynamicStrategy — deformable extension of :class:`DefaultStrategy`.</span>
 
 <span class="sd">Public API:</span>
 
@@ -336,13 +336,13 @@
 <span class="sd">- ``gsplat.rasterization`` has no time axis. The deformation pass itself</span>
 <span class="sd">  (HexPlane → :class:`DeformNetwork` → ``(means, quats, opacities)``) lives</span>
 <span class="sd">  in the trainer (``examples/dynamic_surgical_trainer.py``) and runs *before*</span>
-<span class="sd">  ``rasterization(...)`` is called, mirroring G-SHARP&#39;s ``rasterize_splats``.</span>
+<span class="sd">  ``rasterization(...)`` is called, mirroring G-SHARP's ``rasterize_splats``.</span>
 <span class="sd">  This strategy class only owns the densification policy + deformation-table</span>
 <span class="sd">  bookkeeping; it does **not** apply the deform-net itself.</span>
 <span class="sd">- The ``@dataclass`` decorator is intentionally not applied here: no new</span>
-<span class="sd">  fields are added with defaults, so we inherit the parent&#39;s auto-generated</span>
+<span class="sd">  fields are added with defaults, so we inherit the parent's auto-generated</span>
 <span class="sd">  ``__init__`` cleanly without dataclass-field ordering errors.</span>
-<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">"""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -354,27 +354,27 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.deformation</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeformationTable</span>  <span class="c1"># noqa: F401  (re-export for back-compat)</span>
 
-<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;DynamicStrategy&quot;</span><span class="p">]</span>
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"DynamicStrategy"</span><span class="p">]</span>
 
 
 <div class="viewcode-block" id="DynamicStrategy">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.strategy.DynamicStrategy">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">DynamicStrategy</span><span class="p">(</span><span class="n">DefaultStrategy</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Deformable-aware densification / pruning strategy.</span>
+<span class="w">    </span><span class="sd">"""Deformable-aware densification / pruning strategy.</span>
 
 <span class="sd">    Extra invariants on top of :class:`DefaultStrategy`:</span>
 
-<span class="sd">    - ``state[&quot;dynamic_mask&quot;]`` is a per-Gaussian ``torch.bool`` tensor of</span>
+<span class="sd">    - ``state["dynamic_mask"]`` is a per-Gaussian ``torch.bool`` tensor of</span>
 <span class="sd">      shape ``(num_gaussians,)`` that flags which Gaussians the trainer</span>
 <span class="sd">      should route through the DeformNet. Resized in lock-step with</span>
-<span class="sd">      ``params[&quot;means&quot;]`` by gsplat&#39;s strategy ops (which iterate every</span>
+<span class="sd">      ``params["means"]`` by gsplat's strategy ops (which iterate every</span>
 <span class="sd">      tensor in *state* and apply the per-Gaussian split / duplicate /</span>
 <span class="sd">      prune permutation — see ``gsplat/strategy/ops.py:135, 191-195,</span>
 <span class="sd">      223-225``). Identity is preserved across split (children inherit</span>
-<span class="sd">      the parent&#39;s flag).</span>
+<span class="sd">      the parent's flag).</span>
 
 <span class="sd">    Note that the HexPlane and DeformNet trainables are **not** part of</span>
-<span class="sd">    *params*. gsplat&#39;s densification ops blindly iterate every entry in</span>
+<span class="sd">    *params*. gsplat's densification ops blindly iterate every entry in</span>
 <span class="sd">    *params* and split/duplicate/prune them per-Gaussian; non-per-Gaussian</span>
 <span class="sd">    tensors (HexPlane plane grids, DeformNet MLP weights) would be indexed</span>
 <span class="sd">    with out-of-bounds per-Gaussian indices. Keep those trainables in</span>
@@ -382,14 +382,14 @@
 <span class="sd">    ``examples/dynamic_surgical_trainer.py:build_deform_modules``).</span>
 
 <span class="sd">    Historical note: an earlier version of this strategy stored a</span>
-<span class="sd">    :class:`DeformationTable` wrapper at ``state[&quot;deformation_table&quot;]``</span>
+<span class="sd">    :class:`DeformationTable` wrapper at ``state["deformation_table"]``</span>
 <span class="sd">    and resized it via a custom ``_resize_table`` hook. That hook did</span>
 <span class="sd">    not preserve survivor identity across split, and the trainer never</span>
 <span class="sd">    consulted the mask anyway. Wiring it through *state* as a plain</span>
-<span class="sd">    tensor (so gsplat&#39;s ops do the right thing) closes both gaps. The</span>
+<span class="sd">    tensor (so gsplat's ops do the right thing) closes both gaps. The</span>
 <span class="sd">    wrapper class is still importable for back-compat; the canonical</span>
 <span class="sd">    mask is the tensor in *state*.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
 <div class="viewcode-block" id="DynamicStrategy.check_sanity">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.strategy.DynamicStrategy.check_sanity">[docs]</a>
@@ -398,13 +398,13 @@
         <span class="n">params</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">],</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">ParameterDict</span><span class="p">],</span>
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sanity-check identical to :meth:`DefaultStrategy.check_sanity`.</span>
+<span class="w">        </span><span class="sd">"""Sanity-check identical to :meth:`DefaultStrategy.check_sanity`.</span>
 
 <span class="sd">        The HexPlane / DeformNet trainables live outside *params* (see the</span>
 <span class="sd">        class docstring), so this method has no extra requirements beyond</span>
-<span class="sd">        the parent&#39;s &quot;params and optimizers share keys, and per-Gaussian</span>
-<span class="sd">        keys means/scales/quats/opacities are present&quot; check.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        the parent's "params and optimizers share keys, and per-Gaussian</span>
+<span class="sd">        keys means/scales/quats/opacities are present" check.</span>
+<span class="sd">        """</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">check_sanity</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">)</span></div>
 
 
@@ -417,16 +417,16 @@
         <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">init_dynamic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Extend :meth:`DefaultStrategy.initialize_state` with a per-Gaussian</span>
+<span class="w">        </span><span class="sd">"""Extend :meth:`DefaultStrategy.initialize_state` with a per-Gaussian</span>
 <span class="sd">        dynamic mask.</span>
 
-<span class="sd">        The mask is stored under ``state[&quot;dynamic_mask&quot;]`` as a plain bool</span>
+<span class="sd">        The mask is stored under ``state["dynamic_mask"]`` as a plain bool</span>
 <span class="sd">        tensor (shape ``(num_gaussians,)``). It is **not** wrapped in a</span>
-<span class="sd">        :class:`DeformationTable` so that gsplat&#39;s densification ops in</span>
+<span class="sd">        :class:`DeformationTable` so that gsplat's densification ops in</span>
 <span class="sd">        :mod:`gsplat.strategy.ops` (which iterate every tensor in *state*</span>
 <span class="sd">        and apply the per-Gaussian split / duplicate / prune permutation</span>
 <span class="sd">        automatically — see ops.py:135, 191-195, 223-225) can resize it in</span>
-<span class="sd">        lock-step with ``params[&quot;means&quot;]`` with identity preservation</span>
+<span class="sd">        lock-step with ``params["means"]`` with identity preservation</span>
 <span class="sd">        across split. The wrapper class is still exposed for callers that</span>
 <span class="sd">        want the helper API (see :class:`DeformationTable`), but the</span>
 <span class="sd">        canonical mask now lives in *state*.</span>
@@ -444,10 +444,10 @@
 <span class="sd">        Returns:</span>
 <span class="sd">            The strategy state dict with the additional ``dynamic_mask``</span>
 <span class="sd">            entry (a ``torch.bool`` tensor of shape ``(num_gaussians,)``).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">state</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">initialize_state</span><span class="p">(</span><span class="n">scene_scale</span><span class="o">=</span><span class="n">scene_scale</span><span class="p">)</span>
         <span class="n">fill</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">init_dynamic</span><span class="p">)</span>
-        <span class="n">state</span><span class="p">[</span><span class="s2">&quot;dynamic_mask&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+        <span class="n">state</span><span class="p">[</span><span class="s2">"dynamic_mask"</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
             <span class="p">(</span><span class="n">num_gaussians</span><span class="p">,),</span> <span class="n">fill</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bool</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="n">state</span></div>
@@ -463,7 +463,7 @@
         <span class="n">step</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
         <span class="n">info</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Pre-backward hook — passthrough to the parent.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Pre-backward hook — passthrough to the parent."""</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">step_pre_backward</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">step</span><span class="p">,</span> <span class="n">info</span><span class="p">)</span></div>
 
 
@@ -478,24 +478,24 @@
         <span class="n">info</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
         <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Post-backward hook — defers to the parent.</span>
+<span class="w">        </span><span class="sd">"""Post-backward hook — defers to the parent.</span>
 
-<span class="sd">        ``state[&quot;dynamic_mask&quot;]`` is resized in lock-step with the per-Gaussian</span>
-<span class="sd">        parameters automatically by gsplat&#39;s densification ops (which iterate</span>
+<span class="sd">        ``state["dynamic_mask"]`` is resized in lock-step with the per-Gaussian</span>
+<span class="sd">        parameters automatically by gsplat's densification ops (which iterate</span>
 <span class="sd">        every tensor in *state* and apply the same per-Gaussian permutation</span>
 <span class="sd">        as the params — see ``gsplat/strategy/ops.py:135``). No extra hook</span>
 <span class="sd">        needed here.</span>
 
 <span class="sd">        Raises:</span>
-<span class="sd">            RuntimeError: if ``state[&quot;dynamic_mask&quot;]`` is missing (i.e.</span>
-<span class="sd">                :meth:`initialize_state` wasn&#39;t called first).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="s2">&quot;dynamic_mask&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">state</span><span class="p">:</span>
+<span class="sd">            RuntimeError: if ``state["dynamic_mask"]`` is missing (i.e.</span>
+<span class="sd">                :meth:`initialize_state` wasn't called first).</span>
+<span class="sd">        """</span>
+        <span class="k">if</span> <span class="s2">"dynamic_mask"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">state</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-                <span class="s2">&quot;DynamicStrategy.step_post_backward called before &quot;</span>
-                <span class="s2">&quot;initialize_state(...). Call &quot;</span>
-                <span class="s2">&quot;`state = strategy.initialize_state(scene_scale=..., &quot;</span>
-                <span class="s2">&quot;num_gaussians=N)` first.&quot;</span>
+                <span class="s2">"DynamicStrategy.step_post_backward called before "</span>
+                <span class="s2">"initialize_state(...). Call "</span>
+                <span class="s2">"`state = strategy.initialize_state(scene_scale=..., "</span>
+                <span class="s2">"num_gaussians=N)` first."</span>
             <span class="p">)</span>
 
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">step_post_backward</span><span class="p">(</span>

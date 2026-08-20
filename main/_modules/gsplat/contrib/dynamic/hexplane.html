@@ -311,21 +311,21 @@
 <span></span><span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
-<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the "License");</span>
 <span class="c1"># you may not use this file except in compliance with the License.</span>
 <span class="c1"># You may obtain a copy of the License at</span>
 <span class="c1">#</span>
 <span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
-<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># distributed under the License is distributed on an "AS IS" BASIS,</span>
 <span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
 <span class="c1"># Portions of this file (HexPlane construction) are adapted from the</span>
 <span class="c1"># Nerfstudio K-Planes / HexPlane reference implementation; see</span>
 <span class="c1"># https://github.com/sarafridov/K-Planes for the upstream.</span>
-<span class="sd">&quot;&quot;&quot;HexPlane spatio-temporal feature field (experimental).</span>
+<span class="sd">"""HexPlane spatio-temporal feature field (experimental).</span>
 
 <span class="sd">Multi-resolution 6-plane decomposition of a 4D ``(x, y, z, t)`` feature</span>
 <span class="sd">field, ported from G-SHARP v0.2 (`training/scene/hexplane.py`), itself</span>
@@ -335,7 +335,7 @@
 <span class="sd">yz, yt, zt)`` — are sampled with bilinear interpolation, multiplied</span>
 <span class="sd">element-wise across planes (giving a per-scale feature vector), and</span>
 <span class="sd">concatenated across multi-resolution scales to produce the final feature.</span>
-<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">"""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -347,7 +347,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch.nn.functional</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">F</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
-<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;HexPlaneField&quot;</span><span class="p">]</span>
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"HexPlaneField"</span><span class="p">]</span>
 
 
 <span class="c1"># ---------------------------------------------------------------------------</span>
@@ -356,12 +356,12 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_normalize_aabb</span><span class="p">(</span><span class="n">pts</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">aabb</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Linear remap of *pts* into ``[-1, 1]`` using the axis-aligned bounding box.</span>
+<span class="w">    </span><span class="sd">"""Linear remap of *pts* into ``[-1, 1]`` using the axis-aligned bounding box.</span>
 
 <span class="sd">    Matches the ``normalize_aabb`` helper in the G-SHARP source. With</span>
 <span class="sd">    ``aabb = [[+b, +b, +b], [-b, -b, -b]]`` the remap is</span>
 <span class="sd">    ``-pts / b`` (sign-flipped, kept for parity with upstream).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">pts</span> <span class="o">-</span> <span class="n">aabb</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="p">(</span><span class="mf">2.0</span> <span class="o">/</span> <span class="p">(</span><span class="n">aabb</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">aabb</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span> <span class="o">-</span> <span class="mf">1.0</span>
 
 
@@ -375,7 +375,7 @@
         <span class="n">coords</span> <span class="o">=</span> <span class="n">coords</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">grid_dim</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;_grid_sample_wrapper supports 2D / 3D coords only; got </span><span class="si">{</span><span class="n">grid_dim</span><span class="si">}</span><span class="s2">D.&quot;</span>
+            <span class="sa">f</span><span class="s2">"_grid_sample_wrapper supports 2D / 3D coords only; got </span><span class="si">{</span><span class="n">grid_dim</span><span class="si">}</span><span class="s2">D."</span>
         <span class="p">)</span>
     <span class="n">coords</span> <span class="o">=</span> <span class="n">coords</span><span class="o">.</span><span class="n">view</span><span class="p">(</span>
         <span class="p">[</span><span class="n">coords</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span> <span class="o">+</span> <span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="n">grid_dim</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">coords</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
@@ -386,8 +386,8 @@
         <span class="n">grid</span><span class="p">,</span>
         <span class="n">coords</span><span class="p">,</span>
         <span class="n">align_corners</span><span class="o">=</span><span class="n">align_corners</span><span class="p">,</span>
-        <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;bilinear&quot;</span><span class="p">,</span>
-        <span class="n">padding_mode</span><span class="o">=</span><span class="s2">&quot;border&quot;</span><span class="p">,</span>
+        <span class="n">mode</span><span class="o">=</span><span class="s2">"bilinear"</span><span class="p">,</span>
+        <span class="n">padding_mode</span><span class="o">=</span><span class="s2">"border"</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">interp</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">feature_dim</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
@@ -401,9 +401,9 @@
     <span class="n">b</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">nn</span><span class="o">.</span><span class="n">ParameterList</span><span class="p">:</span>
     <span class="k">if</span> <span class="n">in_dim</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">reso</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;_init_grid_param: in_dim=</span><span class="si">{</span><span class="n">in_dim</span><span class="si">}</span><span class="s2"> != len(reso)=</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">reso</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"_init_grid_param: in_dim=</span><span class="si">{</span><span class="n">in_dim</span><span class="si">}</span><span class="s2"> != len(reso)=</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">reso</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">grid_nd</span> <span class="o">&gt;</span> <span class="n">in_dim</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;_init_grid_param: grid_nd=</span><span class="si">{</span><span class="n">grid_nd</span><span class="si">}</span><span class="s2"> &gt; in_dim=</span><span class="si">{</span><span class="n">in_dim</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"_init_grid_param: grid_nd=</span><span class="si">{</span><span class="n">grid_nd</span><span class="si">}</span><span class="s2"> &gt; in_dim=</span><span class="si">{</span><span class="n">in_dim</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
     <span class="n">has_time_planes</span> <span class="o">=</span> <span class="n">in_dim</span> <span class="o">==</span> <span class="mi">4</span>
     <span class="n">coo_combs</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">itertools</span><span class="o">.</span><span class="n">combinations</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">in_dim</span><span class="p">),</span> <span class="n">grid_nd</span><span class="p">))</span>
     <span class="n">grid_coefs</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">ParameterList</span><span class="p">()</span>
@@ -458,10 +458,10 @@
 
 
 <span class="n">_DEFAULT_PLANE_CONFIG</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;grid_dimensions&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-    <span class="s2">&quot;input_coordinate_dim&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
-    <span class="s2">&quot;output_coordinate_dim&quot;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
-    <span class="s2">&quot;resolution&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">25</span><span class="p">],</span>
+    <span class="s2">"grid_dimensions"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+    <span class="s2">"input_coordinate_dim"</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="s2">"output_coordinate_dim"</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
+    <span class="s2">"resolution"</span><span class="p">:</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">25</span><span class="p">],</span>
 <span class="p">}</span>
 <span class="n">_DEFAULT_MULTIRES</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
 
@@ -469,7 +469,7 @@
 <div class="viewcode-block" id="HexPlaneField">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.hexplane.HexPlaneField">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">HexPlaneField</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Multi-resolution 6-plane decomposition of a 4D feature field.</span>
+<span class="w">    </span><span class="sd">"""Multi-resolution 6-plane decomposition of a 4D feature field.</span>
 
 <span class="sd">    For each scale, six 2D feature planes covering every pair of the four</span>
 <span class="sd">    input axes ``(x, y, z, t)`` are sampled bilinearly and multiplied</span>
@@ -482,7 +482,7 @@
 <span class="sd">    axis-aligned bounding box ``[-bounds, bounds]`` along x/y/z; the time</span>
 <span class="sd">    coordinate is passed through unchanged (callers should pre-normalize it</span>
 <span class="sd">    into a sensible range — values outside the grid are clamped via</span>
-<span class="sd">    ``padding_mode=&quot;border&quot;`` in :func:`torch.nn.functional.grid_sample`).</span>
+<span class="sd">    ``padding_mode="border"`` in :func:`torch.nn.functional.grid_sample`).</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        bounds: Half-extent of the spatial AABB along each axis (default</span>
@@ -495,7 +495,7 @@
 <span class="sd">        multires: Iterable of integer multipliers applied to the *spatial*</span>
 <span class="sd">            grid resolution for each scale; the temporal resolution is</span>
 <span class="sd">            kept fixed across scales. Default ``(1, 2)``.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -529,16 +529,16 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">feat_dim</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="k">for</span> <span class="n">res</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">multires</span><span class="p">:</span>
             <span class="n">scale_config</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
-            <span class="n">base_reso</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">&quot;resolution&quot;</span><span class="p">])</span>
+            <span class="n">base_reso</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">"resolution"</span><span class="p">])</span>
             <span class="c1"># Multi-res only on spatial axes; time grid stays fixed across scales.</span>
-            <span class="n">scale_config</span><span class="p">[</span><span class="s2">&quot;resolution&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">r</span> <span class="o">*</span> <span class="n">res</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">base_reso</span><span class="p">[:</span><span class="mi">3</span><span class="p">]]</span> <span class="o">+</span> <span class="n">base_reso</span><span class="p">[</span>
+            <span class="n">scale_config</span><span class="p">[</span><span class="s2">"resolution"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">r</span> <span class="o">*</span> <span class="n">res</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">base_reso</span><span class="p">[:</span><span class="mi">3</span><span class="p">]]</span> <span class="o">+</span> <span class="n">base_reso</span><span class="p">[</span>
                 <span class="mi">3</span><span class="p">:</span>
             <span class="p">]</span>
             <span class="n">gp</span> <span class="o">=</span> <span class="n">_init_grid_param</span><span class="p">(</span>
-                <span class="n">grid_nd</span><span class="o">=</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">&quot;grid_dimensions&quot;</span><span class="p">],</span>
-                <span class="n">in_dim</span><span class="o">=</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">&quot;input_coordinate_dim&quot;</span><span class="p">],</span>
-                <span class="n">out_dim</span><span class="o">=</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">&quot;output_coordinate_dim&quot;</span><span class="p">],</span>
-                <span class="n">reso</span><span class="o">=</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">&quot;resolution&quot;</span><span class="p">],</span>
+                <span class="n">grid_nd</span><span class="o">=</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">"grid_dimensions"</span><span class="p">],</span>
+                <span class="n">in_dim</span><span class="o">=</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">"input_coordinate_dim"</span><span class="p">],</span>
+                <span class="n">out_dim</span><span class="o">=</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">"output_coordinate_dim"</span><span class="p">],</span>
+                <span class="n">reso</span><span class="o">=</span><span class="n">scale_config</span><span class="p">[</span><span class="s2">"resolution"</span><span class="p">],</span>
             <span class="p">)</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">concat_features</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">feat_dim</span> <span class="o">+=</span> <span class="n">gp</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
@@ -549,7 +549,7 @@
 <div class="viewcode-block" id="HexPlaneField.forward">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.hexplane.HexPlaneField.forward">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">xyzt</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample the multi-resolution HexPlane at the given 4D points.</span>
+<span class="w">        </span><span class="sd">"""Sample the multi-resolution HexPlane at the given 4D points.</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            xyzt: ``(N, 4)`` (or any shape ending in 4) with ``[..., :3]``</span>
@@ -560,11 +560,11 @@
 <span class="sd">            ``(N, feat_dim)`` feature tensor where ``feat_dim ==</span>
 <span class="sd">            output_coordinate_dim * len(multires)`` under</span>
 <span class="sd">            ``concat_features=True``.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">if</span> <span class="n">xyzt</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">4</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;HexPlaneField.forward: xyzt last dim must be 4, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;got shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">xyzt</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">"HexPlaneField.forward: xyzt last dim must be 4, "</span>
+                <span class="sa">f</span><span class="s2">"got shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">xyzt</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
 
         <span class="n">xyz</span> <span class="o">=</span> <span class="n">xyzt</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">]</span>
@@ -575,14 +575,14 @@
         <span class="k">return</span> <span class="n">_interpolate_ms_features</span><span class="p">(</span>
             <span class="n">pts</span><span class="p">,</span>
             <span class="n">ms_grids</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">grids</span><span class="p">,</span>
-            <span class="n">grid_dimensions</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">grid_config</span><span class="p">[</span><span class="s2">&quot;grid_dimensions&quot;</span><span class="p">],</span>
+            <span class="n">grid_dimensions</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">grid_config</span><span class="p">[</span><span class="s2">"grid_dimensions"</span><span class="p">],</span>
             <span class="n">concat_features</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">concat_features</span><span class="p">,</span>
         <span class="p">)</span></div>
 
 
     <span class="c1"># ------------------------------------------------------------------</span>
     <span class="c1"># Plane-partition accessors: keep the spatial / temporal grouping</span>
-    <span class="c1"># next to the grid construction code so regularizers don&#39;t have to</span>
+    <span class="c1"># next to the grid construction code so regularizers don't have to</span>
     <span class="c1"># hardcode the (0,1,3) / (2,4,5) indices.</span>
     <span class="c1"># ------------------------------------------------------------------</span>
 
@@ -592,7 +592,7 @@
 <div class="viewcode-block" id="HexPlaneField.spatial_planes">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.hexplane.HexPlaneField.spatial_planes">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">spatial_planes</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the flat list of spatial planes across all multi-res scales.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Return the flat list of spatial planes across all multi-res scales."""</span>
         <span class="n">out</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="k">for</span> <span class="n">scale_grids</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">grids</span><span class="p">:</span>
             <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_SPATIAL_PLANE_IDXS</span><span class="p">:</span>
@@ -603,7 +603,7 @@
 <div class="viewcode-block" id="HexPlaneField.temporal_planes">
 <a class="viewcode-back" href="../../../../apis/contrib.html#gsplat.contrib.dynamic.hexplane.HexPlaneField.temporal_planes">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">temporal_planes</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the flat list of spatio-temporal planes across all scales.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Return the flat list of spatio-temporal planes across all scales."""</span>
         <span class="n">out</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="k">for</span> <span class="n">scale_grids</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">grids</span><span class="p">:</span>
             <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_TEMPORAL_PLANE_IDXS</span><span class="p">:</span>
