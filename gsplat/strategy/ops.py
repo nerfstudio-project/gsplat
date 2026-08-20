@@ -394,8 +394,8 @@ def sample_add(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
         if isinstance(v, torch.Tensor):
+            v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
             state[k] = torch.cat((v, v_new))
     if scene is not None:
         scene.on_sample_add(sampled_idxs)
