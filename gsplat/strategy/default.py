@@ -265,9 +265,9 @@ class DefaultStrategy(Strategy):
             gs_ids = info["gaussian_ids"]  # [nnz]
             radii = info["radii"].max(dim=-1).values  # [nnz]
         else:
-            # grads is [C, N, 2]
-            sel = (info["radii"] > 0.0).all(dim=-1)  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
+            # grads is [..., C, N, 2]
+            sel = (info["radii"] > 0.0).all(dim=-1)  # [..., C, N]
+            gs_ids = torch.where(sel)[-1]  # [nnz]
             grads = grads[sel]  # [nnz, 2]
             radii = info["radii"][sel].max(dim=-1).values  # [nnz]
         state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
