@@ -222,12 +222,11 @@ public:
     }
 
     __device__ void set(
-        int32_t last_idx_global, int32_t n_accumulated, int32_t logical_batch_start, bool terminal_batch = false
+        int32_t last_idx_tile, int32_t n_accumulated, int32_t logical_batch_offset, bool terminal_batch = false
     )
     {
-        *value_ = make_ushort2(
-            encodeLast(last_idx_global, logical_batch_start), encodeCount(n_accumulated, terminal_batch)
-        );
+        *value_
+            = make_ushort2(encodeLast(last_idx_tile, logical_batch_offset), encodeCount(n_accumulated, terminal_batch));
     }
 
     __device__ void reset()
@@ -241,14 +240,14 @@ public:
         return (pair.y & BATCH_REPLAY_FLAG) != 0u;
     }
 
-    __device__ int32_t last(int32_t logical_batch_start) const
+    __device__ int32_t last(int32_t logical_batch_offset) const
     {
         const ushort2 pair = *value_;
         if(pair.x == 0u)
         {
             return -1;
         }
-        return logical_batch_start + static_cast<int32_t>(pair.x) - 1;
+        return logical_batch_offset + static_cast<int32_t>(pair.x) - 1;
     }
 
     __device__ bool isTerminalBatch() const
@@ -284,15 +283,15 @@ private:
     //      batch-replay flag; fwd-only mode uses the same high bit per
     //      pixel to mark the terminal pre-threshold batch.
     //
-    // The full global last index is reconstructed from the batch's global
-    // start. This keeps the transient partials tensor compact without changing
-    // the final `last_ids` / `sample_counts` semantics.
-    static __device__ uint16_t encodeLast(int32_t last_idx_global, int32_t logical_batch_start)
+    // The full tile-local last index is reconstructed from the batch's local
+    // start. Keeping final `last_ids` tile-local lets the metadata remain int32
+    // when global intersection offsets require int64.
+    static __device__ uint16_t encodeLast(int32_t last_idx_tile, int32_t logical_batch_offset)
     {
-        if(last_idx_global >= 0)
+        if(last_idx_tile >= 0)
         {
-            assert(last_idx_global >= logical_batch_start);
-            const int32_t last_local = last_idx_global - logical_batch_start;
+            assert(last_idx_tile >= logical_batch_offset);
+            const int32_t last_local = last_idx_tile - logical_batch_offset;
             assert(last_local >= 0);
             assert(last_local < 0xFFFF);
             return static_cast<uint16_t>(last_local + 1);

@@ -1022,7 +1022,7 @@ RasterizeToIndices3DGSResult rasterize_to_indices_3dgs(
     at::TensorOptions opt = means2d.options();
     uint32_t I            = (N == 0) ? 0 : means2d.numel() / (2 * N); // number of images
 
-    uint32_t n_isects = flatten_ids.size(0);
+    int64_t n_isects = flatten_ids.size(0);
 
     // First pass: count the number of gaussians that contribute to each pixel
     int64_t n_elems;
@@ -2289,7 +2289,7 @@ RasterizeToIndices2DGSResult rasterize_to_indices_2dgs(
     auto opt   = means2d.options();
     uint32_t I = (N == 0) ? 0 : means2d.numel() / (2 * N); // number of images
 
-    uint32_t n_isects = flatten_ids.size(0);
+    int64_t n_isects = flatten_ids.size(0);
 
     // First pass: count the number of gaussians that contribute to each pixel
     int64_t n_elems;

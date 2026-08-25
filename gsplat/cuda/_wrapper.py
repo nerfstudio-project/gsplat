@@ -1385,7 +1385,7 @@ def isect_tiles_sparse(
     Returns:
         A tuple:
 
-        - **Tile offsets**. Int32 [num_active_tiles + 1]. ``tile_offsets[i]`` is
+        - **Tile offsets**. Int64 [num_active_tiles + 1]. ``tile_offsets[i]`` is
           the exclusive prefix-sum start of the flatten-id range for
           ``active_tiles[i]``; the trailing sentinel ``tile_offsets[-1] ==
           n_isects``.
@@ -2398,7 +2398,8 @@ def rasterize_to_pixels_eval3d_extra(
     kernel raises ``ValueError``.
 
     Args:
-        return_last_ids: If True, also return last flatten_idx per pixel. Default: True.
+        return_last_ids: If True, also return the last tile-local offset in
+            ``flatten_ids`` per pixel. Default: True.
         return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.
         return_normals: If True, compute and return accumulated normals per pixel.
             Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
@@ -2418,7 +2419,8 @@ def rasterize_to_pixels_eval3d_extra(
 
         - **Rendered colors**. [..., C, image_height, image_width, channels]
         - **Rendered alphas**. [..., C, image_height, image_width, 1]
-        - **Last flatten_idx** (optional). [..., C, image_height, image_width]. If return_last_ids=True.
+        - **Last tile-local flatten_ids offset** (optional). [..., C, image_height,
+          image_width]. If return_last_ids=True.
         - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.
         - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.
     """

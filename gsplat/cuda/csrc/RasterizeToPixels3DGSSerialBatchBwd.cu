@@ -42,7 +42,7 @@ template<uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const uint32_t I,
     const uint32_t N,
-    const uint32_t n_isects,
+    const int64_t n_isects,
     const bool packed,
     // fwd inputs
     const vec2 *__restrict__ means2d,         // [..., N, 2] or [nnz, 2]
@@ -57,7 +57,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const uint32_t tile_width,
     const uint32_t tile_height,
     const uint32_t block_offset,
-    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int64_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
     const scalar_t *__restrict__ render_alphas, // [..., image_height, image_width, 1]
@@ -119,11 +119,12 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    int32_t range_start = tile_offsets[tile_id];
-    int32_t range_end
+    const int64_t range_start = tile_offsets[tile_id];
+    const int64_t range_end
         = (image_id == I - 1) && (tile_id == tile_width * tile_height - 1) ? n_isects : tile_offsets[tile_id + 1];
-    const uint32_t block_size  = block.size();
-    const uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t block_size       = block.size();
+    const int64_t num_intersections = range_end - range_start;
+    const int64_t num_batches       = (num_intersections + block_size - 1) / block_size;
 
     extern __shared__ int s[];
     int32_t *id_batch      = (int32_t *)s;                                            // [block_size]
@@ -153,7 +154,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const uint32_t tr              = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
     const int32_t warp_bin_final   = cg::reduce(warp, bin_final, cg::greater<int>());
-    for(uint32_t b = 0; b < num_batches; ++b)
+    for(int64_t b = 0; b < num_batches; ++b)
     {
         // resync all threads before writing next batch of shared mem
         block.sync();
@@ -161,11 +162,11 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         // each thread fetch 1 gaussian from back to front
         // 0 index will be furthest back in batch
         // index of gaussian to load
-        // batch end is the index of the last gaussian in the batch
-        // These values can be negative so must be int32 instead of uint32
-        const int32_t batch_end  = range_end - 1 - block_size * b;
-        const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
-        const int32_t idx        = batch_end - tr;
+        // batch_end_offset is relative to this tile's first intersection.
+        const int64_t batch_end_offset = num_intersections - 1 - block_size * b;
+        const int64_t remaining        = batch_end_offset + 1;
+        const uint32_t batch_size      = static_cast<uint32_t>(remaining < block_size ? remaining : block_size);
+        const int64_t idx              = range_start + batch_end_offset - tr;
         if(idx >= range_start)
         {
             int32_t g            = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
@@ -184,10 +185,12 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         block.sync();
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        for(uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t)
+        const int64_t first_t64 = batch_end_offset > warp_bin_final ? batch_end_offset - warp_bin_final : 0;
+        const uint32_t first_t  = first_t64 < batch_size ? static_cast<uint32_t>(first_t64) : batch_size;
+        for(uint32_t t = first_t; t < batch_size; ++t)
         {
             bool valid = inside;
-            if(batch_end - t > bin_final)
+            if(batch_end_offset - t > bin_final)
             {
                 valid = 0;
             }
@@ -354,7 +357,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     uint32_t I           = render_alphas.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width  = tile_offsets.size(-1);
-    uint32_t n_isects    = flatten_ids.size(0);
+    int64_t n_isects     = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
@@ -412,7 +415,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
                 tile_width,
                 tile_height,
                 0,
-                tile_offsets.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int64_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 render_alphas.const_data_ptr<float>(),
                 last_ids.const_data_ptr<int32_t>(),
@@ -465,7 +468,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernels(
     uint32_t I           = render_alphas.numel() / (image_height * image_width);
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width  = tile_offsets.size(-1);
-    uint32_t n_isects    = flatten_ids.size(0);
+    int64_t n_isects     = flatten_ids.size(0);
     uint32_t n_tiles     = I * tile_height * tile_width;
 
     dim3 threads = {tile_size, tile_size, 1};
@@ -531,7 +534,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernels(
                     tile_width,
                     tile_height,
                     block_offset,
-                    tile_offsets.const_data_ptr<int32_t>(),
+                    tile_offsets.const_data_ptr<int64_t>(),
                     flatten_ids.const_data_ptr<int32_t>(),
                     render_alphas.const_data_ptr<float>(),
                     last_ids.const_data_ptr<int32_t>(),

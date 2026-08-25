@@ -176,8 +176,8 @@ template<
 >
 __device__ __forceinline__ void process_batch_gaussians_fwd(
     const uint32_t batch_id,
-    const int32_t range_start,
-    const int32_t range_end,
+    const int64_t range_start,
+    const int64_t range_end,
     const uint32_t tid,
     const uint32_t C,
     const uint32_t N,
@@ -218,8 +218,9 @@ __device__ __forceinline__ void process_batch_gaussians_fwd(
         return;
     }
 
-    const uint32_t logical_batch_start = range_start + batch_id * LOGICAL_BATCH;
-    if(logical_batch_start >= static_cast<uint32_t>(range_end))
+    const int32_t logical_batch_offset = static_cast<int32_t>(batch_id * LOGICAL_BATCH);
+    const int64_t logical_batch_start  = range_start + logical_batch_offset;
+    if(logical_batch_start >= range_end)
     {
         return;
     }
@@ -244,6 +245,7 @@ __device__ __forceinline__ void process_batch_gaussians_fwd(
         scale_batch,
         normal_batch,
         logical_batch_start,
+        logical_batch_offset,
         range_end,
         flatten_ids,
         // Gaussian inputs.
@@ -291,7 +293,7 @@ __global__ void
         const uint32_t B,
         const uint32_t C,
         const uint32_t N,
-        const uint32_t n_isects,
+        const int64_t n_isects,
         const vec3 *__restrict__ means,
         const vec4 *__restrict__ quats,
         const vec3 *__restrict__ scales,
@@ -314,7 +316,7 @@ __global__ void
         const FThetaCameraDistortionDeviceParams ftheta_device_coeffs,
         const DeviceLidarParamsOpt lidar_device_coeffs,
         const DeviceExternalDistortionParamsOpt external_distortion_device_params,
-        const int32_t *__restrict__ tile_offsets,
+        const int64_t *__restrict__ tile_offsets,
         const int32_t *__restrict__ flatten_ids,
         // CSR + outputs. `bid_to_slot[blockIdx.x]` maps the round-major launch
         // id to the tile-major slot used by fwd_batch_state and partials_meta.
@@ -454,9 +456,9 @@ __global__ void
         }
     }
 
-    const int32_t range_start = tile_offsets[tile_id];
-    const int32_t range_end   = (image_index == static_cast<int32_t>(B * C) - 1) && (tile_id == tiles_per_image - 1)
-                                  ? static_cast<int32_t>(n_isects)
+    const int64_t range_start = tile_offsets[tile_id];
+    const int64_t range_end   = (image_index == static_cast<int32_t>(B * C) - 1) && (tile_id == tiles_per_image - 1)
+                                  ? n_isects
                                   : tile_offsets[tile_id + 1];
     // batch_id is the forward depth-walk index from the front. The deepest
     // batch is the only partial batch when the tile's Gaussian count is not a
@@ -612,8 +614,8 @@ __global__ void
     // SOA layout: `fwd_batch_state[slot, k, pix]` and
     // `partials_meta[slot, pix]`. With pix as the fastest-varying axis,
     // each warp writes contiguous addresses for a fixed state element.
-    const int32_t slot                = batch_offsets_csr[tile_linear] + batch_id;
-    const int32_t logical_batch_start = range_start + batch_id * pixels_per_tile;
+    const int32_t slot                 = batch_offsets_csr[tile_linear] + batch_id;
+    const int32_t logical_batch_offset = batch_id * pixels_per_tile;
     if(tid == 0u)
     {
         // `partials_meta` is allocated with at::empty. Pixel 0 carries the
@@ -664,7 +666,7 @@ __global__ void
         if(valid_pixel[p] && (!this_batch_saturated || !ForBackward))
         {
             FwdPartialsMetaView<ushort2> meta_view(partials_meta, slot, pixels_per_tile, pix_rank_in_tile);
-            meta_view.set(cur_idx[p], n_accumulated[p], logical_batch_start, fwd_terminal_batch);
+            meta_view.set(cur_idx[p], n_accumulated[p], logical_batch_offset, fwd_terminal_batch);
         }
 
         if(valid_pixel[p])
@@ -722,7 +724,7 @@ __global__ void
         const uint32_t B,
         const uint32_t C,
         const uint32_t N,
-        const uint32_t n_isects,
+        const int64_t n_isects,
         const vec3 *__restrict__ means,
         const vec4 *__restrict__ quats,
         const vec3 *__restrict__ scales,
@@ -736,7 +738,7 @@ __global__ void
         const uint32_t tile_height,
         const CameraModelType camera_model_type,
         const DeviceLidarParamsOpt lidar_device_coeffs,
-        const int32_t *__restrict__ tile_offsets,
+        const int64_t *__restrict__ tile_offsets,
         const int32_t *__restrict__ flatten_ids,
         // CSR (in/out): partials on entry, cumulative on exit.
         const int32_t *__restrict__ batches_per_tile,
@@ -879,7 +881,6 @@ __global__ void
         = (batches_per_tile != nullptr) ? static_cast<uint32_t>(batches_per_tile[tile_linear]) : 0u;
     const int32_t batch_base          = (batch_offsets != nullptr) ? batch_offsets[tile_linear] : 0;
     constexpr int32_t pixels_per_tile = TILE_SIZE * TILE_SIZE;
-    const int32_t range_start         = tile_offsets[tile_id];
     // Exact-metadata mode reuses the ray-validity sentinel that partials wrote
     // into compose_c_stop. Fwd-only mode does not allocate compose_c_stop,
     // so it reads the equivalent sentinel from priming_state and uses the same
@@ -942,7 +943,7 @@ __global__ void
     for(int32_t c = 0; c < static_cast<int32_t>(num_batches_this_tile); ++c)
     {
         const int32_t slot                            = batch_base + c;
-        const int32_t logical_batch_start             = range_start + c * pixels_per_tile;
+        const int32_t logical_batch_offset            = c * pixels_per_tile;
         const uint32_t batch_replay_mask_before_batch = batch_replay_mask;
 
 // Per-pixel: either fold this batch's partial, or stop just before it
@@ -984,7 +985,7 @@ __global__ void
                 T_cum[p] = T_cum[p] * walk_prod;
                 if constexpr(ForBackward)
                 {
-                    const int32_t last_p_c = meta_view.last(logical_batch_start);
+                    const int32_t last_p_c = meta_view.last(logical_batch_offset);
                     const int32_t n_p_c    = meta_view.count();
                     if(last_p_c >= 0)
                     {
@@ -1153,7 +1154,7 @@ __global__ void
         const uint32_t B,
         const uint32_t C,
         const uint32_t N,
-        const uint32_t n_isects,
+        const int64_t n_isects,
         const vec3 *__restrict__ means,
         const vec4 *__restrict__ quats,
         const vec3 *__restrict__ scales,
@@ -1177,7 +1178,7 @@ __global__ void
         const FThetaCameraDistortionDeviceParams ftheta_device_coeffs,
         const DeviceLidarParamsOpt lidar_device_coeffs,
         const DeviceExternalDistortionParamsOpt external_distortion_device_params,
-        const int32_t *__restrict__ tile_offsets,
+        const int64_t *__restrict__ tile_offsets,
         const int32_t *__restrict__ flatten_ids,
         const int32_t *__restrict__ batches_per_tile,
         const int32_t *__restrict__ batch_offsets,
@@ -1323,9 +1324,9 @@ __global__ void
 
     const int32_t batch_base = (batch_offsets != nullptr) ? batch_offsets[tile_linear] : 0;
 
-    const int32_t range_start = tile_offsets[tile_id];
-    const int32_t range_end   = (image_index == static_cast<int32_t>(B * C) - 1) && (tile_id == tiles_per_image - 1)
-                                  ? static_cast<int32_t>(n_isects)
+    const int64_t range_start = tile_offsets[tile_id];
+    const int64_t range_end   = (image_index == static_cast<int32_t>(B * C) - 1) && (tile_id == tiles_per_image - 1)
+                                  ? n_isects
                                   : tile_offsets[tile_id + 1];
     float T_cum[PIXELS_PER_THREAD];
     float pix_cum[PIXELS_PER_THREAD][CDIM] = {};
@@ -1558,7 +1559,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     const uint32_t I           = B * C;
     const uint32_t tile_height = static_cast<uint32_t>(tile_offsets.size(-2));
     const uint32_t tile_width  = static_cast<uint32_t>(tile_offsets.size(-1));
-    const uint32_t n_isects    = static_cast<uint32_t>(flatten_ids.size(0));
+    const int64_t n_isects     = flatten_ids.size(0);
     const int32_t pixels_per_tile = tile_size * tile_size;
 
     TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
@@ -1796,7 +1797,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
                 ftheta_device_coeffs,
                 lidar_device_coeffs,
                 external_distortion_device_params,
-                tile_offsets.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int64_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 batch_offsets.const_data_ptr<int32_t>(),
                 data_ptr_or_null<const int32_t>(total_batches > 0, bid_to_slot),
@@ -1842,7 +1843,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
                 tile_height,
                 camera_model,
                 lidar_device_coeffs,
-                tile_offsets.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int64_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 batches_per_tile.const_data_ptr<int32_t>(),
                 batch_offsets.const_data_ptr<int32_t>(),
@@ -1910,7 +1911,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
                     ftheta_device_coeffs,
                     lidar_device_coeffs,
                     external_distortion_device_params,
-                    tile_offsets.const_data_ptr<int32_t>(),
+                    tile_offsets.const_data_ptr<int64_t>(),
                     flatten_ids.const_data_ptr<int32_t>(),
                     batches_per_tile.const_data_ptr<int32_t>(),
                     batch_offsets.const_data_ptr<int32_t>(),
