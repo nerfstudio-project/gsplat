@@ -52,6 +52,8 @@ from gsplat._helper import (
 
 from gsplat.cuda._wrapper import (
     CameraModel,
+    FThetaCameraDistortionParameters,
+    FThetaPolynomialType,
     RollingShutterType,
     UnscentedTransformParameters,
     _make_lazy_cuda_cls,
@@ -706,7 +708,7 @@ def test_fully_fused_projection_packed(
     not torch.cuda.is_available(), reason="CUDA required for UT projection"
 )
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
-@pytest.mark.parametrize("camera_model", ["pinhole", "ortho"])
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "ftheta"])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize(
     "require_all_valid", [True, False], ids=["allvalid", "somevalid"]
@@ -751,6 +753,31 @@ def test_fully_fused_projection_ut(
     ut_params = UnscentedTransformParameters(
         require_all_sigma_points_valid=require_all_valid
     )
+    ftheta_coeffs = (
+        FThetaCameraDistortionParameters(
+            reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
+            pixeldist_to_angle_poly=(
+                0.0,
+                8.4335003e-03,
+                2.3174282e-06,
+                -5.0478608e-08,
+                6.1392608e-10,
+                -1.7447865e-12,
+            ),
+            angle_to_pixeldist_poly=(
+                0.0,
+                118.43232,
+                -2.562147,
+                6.317949,
+                -10.41861,
+                3.6694396,
+            ),
+            max_angle=math.radians(120.0),
+            linear_cde=(9.9968284e-01, 1.8735906e-05, 1.7659619e-05),
+        )
+        if camera_model == "ftheta"
+        else None
+    )
 
     # Setup rolling shutter (end viewmats) if not GLOBAL
     if rolling_shutter != RollingShutterType.GLOBAL:
@@ -779,6 +806,7 @@ def test_fully_fused_projection_ut(
         "width": width,
         "height": height,
         "camera_model": camera_model,
+        "ftheta_coeffs": ftheta_coeffs,
         "eps2d": 0.3,
         "near_plane": 0.01,
         "far_plane": 1e10,
@@ -884,9 +912,21 @@ def test_fully_fused_projection_ut(
         _bound = 5e-2 + 2e-3 * means2d_torch[sel].abs()
         _fail = _diff > _bound
         _fr = _fail.float().mean().item()
-        # fail_cap = 1.05 x worst observed (0.013145%) -> 0.014%.
-        assert _fr <= 1.4e-4, (
-            f"UT means2d (rolling): fail-rate {_fr:.4%} > cap 0.014% "
+        # ROLLING means2d has a boundary tail; cap the fail-rate per camera
+        # model. The fail-rate is a fraction over the selected elements, so
+        # subsampling the scene raises its variance and the cap must admit that.
+        # Keep the calibrated caps explicit per model so a new model cannot
+        # silently inherit another model's numerical-error budget.
+        # Preserve main's 0.014% budget for its existing models. RTX A6000
+        # FTheta worst observed fail-rate is 0.000928%; retain a 0.015% cap for
+        # cross-GPU/codegen margin.
+        _fail_cap = {
+            "pinhole": 1.4e-4,
+            "ortho": 1.4e-4,
+            "ftheta": 1.5e-4,
+        }[camera_model]
+        assert _fr <= _fail_cap, (
+            f"UT means2d (rolling): fail-rate {_fr:.4%} > cap {_fail_cap:.3%} "
             f"(atol=5e-2, rtol=2e-3, {int(_fail.sum().item())}/{_fail.numel()})"
         )
         # Outlier guard: even admitted outliers must satisfy a per-element
@@ -920,11 +960,14 @@ def test_fully_fused_projection_ut(
     # high rel-diff -- previously rtol=10.0 admitted any error.  Use a
     # bounded per-element check with a fail-rate cap.
     if rolling_shutter == RollingShutterType.GLOBAL:
+        _conics_rtol, _conics_atol = (
+            (2e-2, 3.2e-2) if camera_model == "ftheta" else (2e-3, 2e-3)
+        )
         torch.testing.assert_close(
             conics_cuda[sel],
             conics_torch[sel],
-            rtol=2e-3,
-            atol=2e-3,
+            rtol=_conics_rtol,
+            atol=_conics_atol,
         )
     else:
         _diff_c = (conics_cuda[sel] - conics_torch[sel]).abs()
@@ -934,8 +977,11 @@ def test_fully_fused_projection_ut(
         # fail_cap = 1.05 x envelope:
         #   RTX PRO 2000  worst fail-rate 0.0161%
         #   RTX PRO 6000  worst fail-rate 0.0191%
-        assert _fr_c <= 2.1e-4, (
-            f"UT conics (rolling): fail-rate {_fr_c:.4%} > cap 0.021% "
+        #   RTX A6000 FTheta  worst fail-rate 0.0598%
+        _conics_fail_cap = 6.3e-4 if camera_model == "ftheta" else 2.1e-4
+        assert _fr_c <= _conics_fail_cap, (
+            f"UT conics (rolling): fail-rate {_fr_c:.4%} > cap "
+            f"{_conics_fail_cap:.3%} "
             f"(atol=1e-2, rtol=1e-2, {int(_fail_c.sum().item())}/{_fail_c.numel()})"
         )
         # Outlier guard tightened to 1.05 x worst observed (1.855) -> 2.0.
@@ -962,8 +1008,11 @@ def test_fully_fused_projection_ut(
     #   boundary band: Gaussians whose footprint crosses an integer y ->
     #                 budgeted, symmetric flip-rate check.
     if rolling_shutter == RollingShutterType.GLOBAL:
+        # FTheta worst observed max_abs is 2.8178e-2 in CI; use a 1.05x
+        # cross-GPU envelope while retaining the tighter budget for other models.
+        _comps_atol = 3e-2 if camera_model == "ftheta" else 1e-2
         torch.testing.assert_close(
-            comps_cuda[sel], comps_torch[sel], rtol=0.01, atol=0.01
+            comps_cuda[sel], comps_torch[sel], rtol=0.01, atol=_comps_atol
         )
     else:
         # Boundary mask = "any of the 7 UT sigma points might project within
@@ -1002,13 +1051,17 @@ def test_fully_fused_projection_ut(
         # CUDA does not expose per-sigma-point projections, so a true cross
         # predicate cannot be written here; the boundary mask is a geometric
         # proxy.
+        # FTheta calibration on this fixture: interior max_abs=1.42e-2 and
+        # boundary flip ratio=0.1368%; use 1.05x envelopes.
+        _comps_interior_atol = 1.5e-2 if camera_model == "ftheta" else 7e-3
+        _comps_boundary_flip_cap = 1.5e-3 if camera_model == "ftheta" else 4.5e-4
         assert_close_with_boundary_band(
             comps_cuda[sel],
             comps_torch[sel],
             boundary_mask=boundary_mask,
-            interior_atol=7e-3,
+            interior_atol=_comps_interior_atol,
             interior_rtol=0.01,
-            boundary_max_flip_ratio=4.5e-4,  # 1.05 x observed worst (4.23e-4)
+            boundary_max_flip_ratio=_comps_boundary_flip_cap,
             boundary_symmetry_tol=1.0,  # disabled: too few flips meaningful
             flip_predicate=lambda a, e: (a - e).abs() > 7e-3,
             boundary_cross_predicate=None,
@@ -1025,6 +1078,142 @@ def test_fully_fused_projection_ut(
             f"exceed outlier bound atol=0.46; worst diff "
             f"{_diff_a.max().item():.4e}"
         )
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA required for UT projection"
+)
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_fully_fused_projection_ut_ftheta_straddles_camera_plane():
+    """Invalid FTheta sigma points still contribute their clamped projections."""
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+
+    focal = 80.0
+    width, height = 640, 480
+    means = torch.tensor([[0.2, 0.1, 0.04]], device=device)
+    scales = torch.tensor([[0.05, 0.08, 0.4]], device=device)
+    ftheta_coeffs = FThetaCameraDistortionParameters(
+        reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
+        pixeldist_to_angle_poly=(0.0, 1.0 / focal, 0.0, 0.0, 0.0, 0.0),
+        angle_to_pixeldist_poly=(0.0, focal, 0.0, 0.0, 0.0, 0.0),
+        max_angle=math.radians(85.0),
+        linear_cde=(1.0, 0.0, 0.0),
+    )
+    ut_params = UnscentedTransformParameters(
+        alpha=0.1,
+        beta=2.0,
+        kappa=0.0,
+        require_all_sigma_points_valid=False,
+    )
+
+    near_plane = 0.01
+    # The center passes the near-plane test, while the negative-z sigma point
+    # lies outside this <= pi/2 FTheta cone and is projected at max_angle.
+    # Sigma-point offset along z is sqrt(n + lambda) * scale, with n = 3 the UT
+    # state dimension and lambda = alpha**2 * (n + kappa) - n, which collapses
+    # to alpha * sqrt(n) at kappa = 0.
+    sigma_spread_z = ut_params.alpha * math.sqrt(3) * scales[0, 2]
+    assert means[0, 2] > near_plane
+    assert means[0, 2] - sigma_spread_z < 0.0
+
+    parameters = {
+        "means": means,
+        "quats": torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device),
+        "scales": scales,
+        "opacities": None,
+        "viewmats": torch.eye(4, device=device).reshape(1, 4, 4),
+        "Ks": torch.tensor(
+            [
+                [
+                    [1.0, 0.0, width / 2],
+                    [0.0, 1.0, height / 2],
+                    [0.0, 0.0, 1.0],
+                ]
+            ],
+            device=device,
+        ),
+        "width": width,
+        "height": height,
+        "camera_model": "ftheta",
+        "ftheta_coeffs": ftheta_coeffs,
+        "eps2d": 0.3,
+        "near_plane": near_plane,
+        "far_plane": 1e10,
+        "ut_params": ut_params,
+    }
+
+    radii_cuda, means2d_cuda, _, conics_cuda, _ = fully_fused_projection_with_ut(
+        **parameters
+    )
+    radii_torch, means2d_torch, _, conics_torch, _ = _fully_fused_projection_with_ut(
+        **parameters
+    )
+
+    assert (radii_cuda > 0).all()
+    assert (radii_torch > 0).all()
+
+    # Pin the footprint so changing both implementations in lockstep cannot
+    # restore the old (0, 0)-sentinel contribution unnoticed.
+    expected_means2d = torch.tensor([[[191.88852, 172.81131]]], device=device)
+    torch.testing.assert_close(means2d_cuda, expected_means2d, rtol=0, atol=5e-2)
+    torch.testing.assert_close(means2d_torch, expected_means2d, rtol=0, atol=5e-2)
+    torch.testing.assert_close(means2d_cuda, means2d_torch, rtol=2e-3, atol=5e-2)
+    torch.testing.assert_close(conics_cuda, conics_torch, rtol=2e-3, atol=2e-3)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA required for UT projection"
+)
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_fully_fused_projection_ut_ftheta_culling_branch():
+    """FTheta switches from signed-z to radial culling with distance sorting."""
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+
+    focal = 80.0
+    width, height = 640, 480
+    parameters = {
+        "means": torch.tensor([[0.2, 0.1, -0.04]], device=device),
+        "quats": torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device),
+        "scales": torch.full((1, 3), 0.01, device=device),
+        "opacities": None,
+        "viewmats": torch.eye(4, device=device).reshape(1, 4, 4),
+        "Ks": torch.tensor(
+            [
+                [
+                    [1.0, 0.0, width / 2],
+                    [0.0, 1.0, height / 2],
+                    [0.0, 0.0, 1.0],
+                ]
+            ],
+            device=device,
+        ),
+        "width": width,
+        "height": height,
+        "camera_model": "ftheta",
+        "ftheta_coeffs": FThetaCameraDistortionParameters(
+            reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
+            pixeldist_to_angle_poly=(0.0, 1.0 / focal, 0.0, 0.0, 0.0, 0.0),
+            angle_to_pixeldist_poly=(0.0, focal, 0.0, 0.0, 0.0, 0.0),
+            max_angle=math.radians(120.0),
+            linear_cde=(1.0, 0.0, 0.0),
+        ),
+        "eps2d": 0.3,
+        "near_plane": 0.01,
+        "far_plane": 1e10,
+        "ut_params": UnscentedTransformParameters(),
+    }
+
+    for projection in (
+        fully_fused_projection_with_ut,
+        _fully_fused_projection_with_ut,
+    ):
+        radii_global_z = projection(**parameters, global_z_order=True)[0]
+        radii_radial = projection(**parameters, global_z_order=False)[0]
+
+        assert (radii_global_z == 0).all()
+        assert (radii_radial > 0).all()
 
 
 @pytest.mark.skipif(
