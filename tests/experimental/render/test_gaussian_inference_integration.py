@@ -176,9 +176,9 @@ def test_full_cross_path_parity(sh_degree, sh_compression):
 
     # PSNR check
     psnr = _compute_psnr(vanilla_renders, inference_ret.frame)
-    # 16b SH compression drops CoCg for higher-order terms (k≥1), making it
+    # 16b SH compression drops CoCg for higher-order terms (kâ‰¥1), making it
     # inherently lossy for scenes with significant HO color variation; use a
-    # lower floor. 32b and no-compression paths target ≥ 40 dB.
+    # lower floor. 32b and no-compression paths target â‰¥ 40 dB.
     psnr_floor = 20.0 if sh_compression == "16b" else 40.0
     assert psnr >= psnr_floor, (
         f"PSNR {psnr:.1f} dB below {psnr_floor} dB for "
@@ -378,10 +378,10 @@ def test_dispatch_keys_rasterize_op():
 
 @skipif_no_cuda
 def test_dispatch_keys_pack_op():
-    """pack_gaussian_inference_scene is callable via gsplat_scene_cuda and produces no grad_fn."""
-    from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
+    """pack_gaussian_inference_scene is callable via gsplat_scene_hip and produces no grad_fn."""
+    from gsplat.scene.kernels._backend import _SCENE_HIP  # noqa: F401
 
-    assert callable(_SCENE_CUDA.pack_gaussian_inference_scene)
+    assert callable(_SCENE_HIP.pack_gaussian_inference_scene)
 
     # Verify CUDA dispatch
     means = torch.randn(10, 3, device="cuda")
@@ -391,7 +391,7 @@ def test_dispatch_keys_pack_op():
     opacities = torch.rand(10, device="cuda")
     colors = torch.rand(10, 3, device="cuda")
 
-    mp, inference, cp = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp, inference, cp = _SCENE_HIP.pack_gaussian_inference_scene(
         means, quats, scales, opacities, colors, -1, 0
     )
     assert mp.shape == (3, 10)
@@ -399,7 +399,7 @@ def test_dispatch_keys_pack_op():
 
     # No grad_fn on outputs (torch::NoGradGuard in C++)
     means_g = means.clone().requires_grad_(True)
-    mp_g, inference_g, cp_g = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp_g, inference_g, cp_g = _SCENE_HIP.pack_gaussian_inference_scene(
         means_g, quats, scales, opacities, colors, -1, 0
     )
     assert (

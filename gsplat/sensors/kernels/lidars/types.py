@@ -33,7 +33,7 @@ class SpinningDirection(IntEnum):
     """Spinning-LiDAR azimuth sweep direction.
 
     Mirrors ``gsplat_sensors::SpinningDirection`` declared in
-    ``gsplat/sensors/kernels/cuda/csrc/lidar_params.h``. The C++ definition is the
+    ``gsplat/sensors/kernels/hip/csrc/lidar_params.h``. The C++ definition is the
     source of truth; this class is verified against it at import time by
     :func:`_verify_spinning_direction_matches_cpp`.
     """
@@ -43,12 +43,12 @@ class SpinningDirection(IntEnum):
 
 
 def _verify_spinning_direction_matches_cpp() -> None:
-    cpp_enum = getattr(_backend._SENSORS_CUDA, "SpinningDirection", None)
+    cpp_enum = getattr(_backend._SENSORS_HIP, "SpinningDirection", None)
     if cpp_enum is None:
         raise RuntimeError(
-            "Loaded gsplat_sensors_cuda extension does not expose SpinningDirection. "
+            "Loaded gsplat_sensors_hip extension does not expose SpinningDirection. "
             "Rebuild the native extension (see "
-            "gsplat/sensors/kernels/cuda/ext.cpp)."
+            "gsplat/sensors/kernels/hip/ext.cpp)."
         )
     for member in SpinningDirection:
         cpp_member = getattr(cpp_enum, member.name, None)
@@ -56,7 +56,7 @@ def _verify_spinning_direction_matches_cpp() -> None:
             raise RuntimeError(
                 f"C++ SpinningDirection is missing member {member.name!r}; "
                 "Python SpinningDirection in gsplat/sensors/kernels/lidars/types.py "
-                "and C++ in gsplat/sensors/kernels/cuda/csrc/lidar_params.h are "
+                "and C++ in gsplat/sensors/kernels/hip/csrc/lidar_params.h are "
                 "out of sync."
             )
         if int(cpp_member) != member.value:
@@ -64,7 +64,7 @@ def _verify_spinning_direction_matches_cpp() -> None:
                 f"SpinningDirection.{member.name} mismatch: "
                 f"Python={member.value}, C++={int(cpp_member)}. "
                 "Update one side to match the other (C++ source of truth: "
-                "gsplat/sensors/kernels/cuda/csrc/lidar_params.h)."
+                "gsplat/sensors/kernels/hip/csrc/lidar_params.h)."
             )
 
 

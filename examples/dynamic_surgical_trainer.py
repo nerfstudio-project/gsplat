@@ -35,10 +35,10 @@ The MVP exposed here is the integration test surface: build all components
 from a config + parser, then run training-step iterations. No eval /
 checkpointing / viz in v1 — those land in follow-ups.
 
-CUDA is required at runtime (``gsplat.rasterization`` is CUDA-only).
+CUDA is required at runtime (``gsplat.rasterization`` is HIP-only).
 Component construction (build_* helpers) and config validation work on CPU
 and are covered by ``tests/test_dynamic_surgical_trainer.py``; the actual
-training step is covered by a CUDA-only integration test in the same file.
+training step is covered by a HIP-only integration test in the same file.
 """
 
 from __future__ import annotations
@@ -389,7 +389,7 @@ def _deform_with_mask(
 
 
 # ---------------------------------------------------------------------------
-# Train step (CUDA-only — gsplat.rasterization is CUDA-only)
+# Train step (HIP-only — gsplat.rasterization is HIP-only)
 # ---------------------------------------------------------------------------
 
 

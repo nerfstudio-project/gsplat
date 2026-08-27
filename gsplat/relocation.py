@@ -19,7 +19,7 @@ from typing import Tuple
 import torch
 from torch import Tensor
 
-from .cuda._wrapper import _make_lazy_cuda_func
+from .hip._wrapper import _make_lazy_cuda_func
 
 
 def compute_relocation(

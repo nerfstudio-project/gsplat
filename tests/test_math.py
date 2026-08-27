@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for mathematical operations in gsplat.cuda._math module."""
+"""Tests for mathematical operations in gsplat.hip._math module."""
 
 import math
 
@@ -30,7 +30,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_quat_normalize_rotation():
     """Test _quat_normalize_rotation handles sign and normalization correctly."""
-    from gsplat.cuda._math import _quat_normalize_rotation
+    from gsplat.hip._math import _quat_normalize_rotation
 
     # Test 1: Already normalized with w>0 (should be unchanged)
     q_norm_pos_w = torch.tensor([[0.8, 0.2, 0.2, 0.4]], device=device)
@@ -95,7 +95,7 @@ def test_quat_normalize_rotation():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_quat_to_rotmat():
     """Test _quat_to_rotmat converts quaternions correctly."""
-    from gsplat.cuda._math import _quat_to_rotmat
+    from gsplat.hip._math import _quat_to_rotmat
 
     # Test 1: Identity quaternion → identity matrix
     q_identity = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
@@ -140,7 +140,7 @@ def test_quat_to_rotmat():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_rotmat_to_quat():
     """Test _rotmat_to_quat converts rotation matrices correctly."""
-    from gsplat.cuda._math import _rotmat_to_quat
+    from gsplat.hip._math import _rotmat_to_quat
     import math as m
 
     # Test 1: Identity matrix → identity quaternion (w is largest, trace > 0)
@@ -205,7 +205,7 @@ def test_rotmat_to_quat():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_rotmat_to_quat_roundtrip():
     """Test _rotmat_to_quat and _quat_to_rotmat are inverses."""
-    from gsplat.cuda._math import (
+    from gsplat.hip._math import (
         _rotmat_to_quat,
         _quat_to_rotmat,
         _quat_normalize_rotation,
@@ -229,7 +229,7 @@ def test_rotmat_to_quat_roundtrip():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_quat_inverse():
     """Test _quat_inverse produces correct inverse."""
-    from gsplat.cuda._math import _quat_inverse, _quat_rotate
+    from gsplat.hip._math import _quat_inverse, _quat_rotate
 
     # Generate random unit quaternions
     q_rand = torch.randn(100, 4, device=device)
@@ -270,7 +270,7 @@ def test_quat_inverse():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_quat_rotate():
     """Test _quat_rotate rotates vectors correctly."""
-    from gsplat.cuda._math import _quat_rotate
+    from gsplat.hip._math import _quat_rotate
 
     # Test 1: Identity quaternion (1, 0, 0, 0) should not rotate
     q_identity = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
@@ -339,7 +339,7 @@ def test_quat_rotate():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_quat_slerp():
     """Test _quat_slerp interpolation."""
-    from gsplat.cuda._math import _quat_slerp, _quat_to_rotmat, _quat_normalize_rotation
+    from gsplat.hip._math import _quat_slerp, _quat_to_rotmat, _quat_normalize_rotation
 
     # Test 1: Interpolation at t=0 returns q0
     q0_rand = torch.randn(10, 4, device=device)
@@ -434,7 +434,7 @@ def test_quat_slerp():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_quat_multiply():
     """Test _quat_multiply function for various quaternion multiplication scenarios."""
-    from gsplat.cuda._math import _quat_multiply
+    from gsplat.hip._math import _quat_multiply
 
     # Create batch of basis quaternions: [1, i, j, k]
     basis = torch.tensor(
@@ -502,7 +502,7 @@ def test_quat_multiply():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_safe_normalize():
     """Test _safe_normalize matches expected behavior."""
-    from gsplat.cuda._math import _safe_normalize
+    from gsplat.hip._math import _safe_normalize
 
     # Test normal vectors
     v_rand = torch.randn(100, 3, device=device)

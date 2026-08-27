@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the sparse tile-intersection op.
 
-Compares the CUDA ``gsplat.cuda._wrapper.isect_tiles_sparse`` against the
-pure-torch reference ``gsplat.cuda._torch_impl._isect_tiles_sparse``, an
+Compares the CUDA ``gsplat.hip._wrapper.isect_tiles_sparse`` against the
+pure-torch reference ``gsplat.hip._torch_impl._isect_tiles_sparse``, an
 obviously-correct looped implementation.
 """
 
@@ -15,7 +15,7 @@ import torch
 device = torch.device("cuda:0")
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="isect_tiles_sparse is CUDA-only"
+    not torch.cuda.is_available(), reason="isect_tiles_sparse is HIP-only"
 )
 
 
@@ -66,8 +66,8 @@ def _make_mask(C, th, tw, pattern, seed):
 
 
 def _check(means2d, radii, depths, mask, active, C, ts, tw, th, image_ids=None):
-    from gsplat.cuda._torch_impl import _isect_tiles_sparse
-    from gsplat.cuda._wrapper import isect_tiles_sparse
+    from gsplat.hip._torch_impl import _isect_tiles_sparse
+    from gsplat.hip._wrapper import isect_tiles_sparse
 
     g_off, g_ids = isect_tiles_sparse(
         means2d, radii, depths, mask, active, C, ts, tw, th, image_ids=image_ids
@@ -132,7 +132,7 @@ def test_sparse_intersect_zero_radii():
     radii = torch.zeros_like(radii)
     th, tw = _grid(W, H, 16)
     mask, active = _make_mask(2, th, tw, "all", seed=13)
-    from gsplat.cuda._wrapper import isect_tiles_sparse
+    from gsplat.hip._wrapper import isect_tiles_sparse
 
     off, ids = isect_tiles_sparse(means2d, radii, depths, mask, active, 2, 16, tw, th)
     assert ids.numel() == 0
@@ -144,7 +144,7 @@ def test_sparse_intersect_empty_active():
     th, tw = _grid(W, H, 16)
     mask = torch.zeros(2, th, tw, dtype=torch.bool, device=device)
     active = torch.empty(0, dtype=torch.int32, device=device)
-    from gsplat.cuda._wrapper import isect_tiles_sparse
+    from gsplat.hip._wrapper import isect_tiles_sparse
 
     off, ids = isect_tiles_sparse(means2d, radii, depths, mask, active, 2, 16, tw, th)
     assert ids.numel() == 0
@@ -182,8 +182,8 @@ def test_isect_tiles_sparse_ties():
     # share an exact depth. Tie order is undefined, so the CUDA op and the torch
     # reference need only agree on the per-tile id *set*; the offset table must
     # still match exactly.
-    from gsplat.cuda._torch_impl import _isect_tiles_sparse
-    from gsplat.cuda._wrapper import isect_tiles_sparse
+    from gsplat.hip._torch_impl import _isect_tiles_sparse
+    from gsplat.hip._wrapper import isect_tiles_sparse
 
     means2d, radii, depths, W, H = _make_inputs(2, 512, seed=8, radius=(8.0, 20.0))
     depths = torch.randint(1, 4, depths.shape, device=device).to(depths).contiguous()
@@ -213,7 +213,7 @@ def test_isect_tiles_sparse_ties():
 def test_isect_tiles_sparse_deterministic():
     # Each run on identical inputs must produce identical outputs (no
     # nondeterministic sort/atomics) — cross-checks would be unstable otherwise.
-    from gsplat.cuda._wrapper import isect_tiles_sparse
+    from gsplat.hip._wrapper import isect_tiles_sparse
 
     means2d, radii, depths, W, H = _make_inputs(3, 512, seed=9)
     th, tw = _grid(W, H, 16)

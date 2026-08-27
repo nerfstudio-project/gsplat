@@ -45,7 +45,7 @@ callable surface consumed by `functional/`):
 3. **Dtype** — Floating-point requirements per operator (e.g. quaternion and SE3
    ops: `float32` / `float64`; trajectory helpers bound in `ext.cpp`: `float32`
    for pose and time tensors where the native path is float32-only).
-4. **Device** — CUDA-only operators require CUDA tensors; multi-input functions
+4. **Device** — HIP-only operators require CUDA tensors; multi-input functions
    require a single shared device (and dtype) where the kernels do.
 
 Validation stays on those **wrapper** functions (the layer `functional/` calls
@@ -71,11 +71,11 @@ gsplat/geometry/
       build.py
       ext.cpp
       csrc/
-        coordinate_conversions.cuh
-        quaternion.cu
-        quaternion.cuh
-        pose.cu
-        pose.cuh
+        coordinate_conversions.hip.h
+        quaternion.hip
+        quaternion.hip.h
+        pose.hip
+        pose.hip.h
   functional/
     __init__.py
     quaternion.py
@@ -108,7 +108,7 @@ not from the point of view of CUDA implementation details.
 
 It is responsible for:
 
-- loading and validating the `gsplat_geometry_cuda` extension,
+- loading and validating the `gsplat_geometry_hip` extension,
 - defining `torch.autograd.Function` wrappers and direct backend dispatch,
 - owning native extension build configuration,
 - containing native CUDA and C++ sources,
@@ -151,13 +151,13 @@ not in terms of backend modules or native entrypoints.
 The module follows this dependency direction:
 
 ```text
-functional/  ->  kernels/  ->  kernels/cuda/
+functional/  ->  kernels/  ->  kernels/hip/
 ```
 
 Rules:
 
 - `functional/` may depend on `kernels/`.
-- native sources under `kernels/cuda/` may depend on `include/`.
+- native sources under `kernels/hip/` may depend on `include/`.
 - `include/` does not depend on `functional/`.
 - public API definitions do not live under `kernels/`.
 
@@ -187,50 +187,50 @@ The kernel layer is organized by implementation concern.
 - `kernels/pose_ops.py` contains pose and trajectory backend wrappers (including
   Python-level validation on the public wrappers), autograd implementations,
   and dispatch to CUDA.
-- `kernels/cuda/` contains build logic and native source code.
+- `kernels/hip/` contains build logic and native source code.
 
 This layer is where explicit forward and backward kernel entrypoints are bound
 to Python.
 
-## CUDA native layout (`kernels/cuda/csrc/`)
+## CUDA native layout (`kernels/hip/csrc/`)
 
-Native geometry CUDA code is split by **one `.cuh` per sibling `.cu`** (same
-basename). Each `.cu` file includes only its matching header; the header
+Native geometry CUDA code is split by **one `.hip.h` per sibling `.hip`** (same
+basename). Each `.hip` file includes only its matching header; the header
 holds the device-side implementation that kernels need, and the translation unit
 holds launch helpers, `__global__` kernels, and the extension entry points
 (`*_cuda`, `*_bwd_cuda`) bound from C++/Python.
 
-Reusable device helpers live in the owning `.cuh` under `gsplat_geometry`;
-host exports stay in the `.cu` translation units.
+Reusable device helpers live in the owning `.hip.h` under `gsplat_geometry`;
+host exports stay in the `.hip` translation units.
 
-**`quaternion.cuh` / `quaternion.cu`**
+**`quaternion.hip.h` / `quaternion.hip`**
 
-- `quaternion.cuh`: template and small `__device__` helpers (e.g. `cross3`,
+- `quaternion.hip.h`: template and small `__device__` helpers (e.g. `cross3`,
   `quat_multiply_impl`, `quat_rotate_vector_*_impl`, `quat_slerp_pair_*`, `quat_to_matrix_fwd_write`,
   `quat_normalize_safe_*_write`), per-row `*_fwd_device` / `*_bwd_device` bodies
   (which delegate to those scalars where applicable), and related constants/traits
   (`QuatNormEps`, etc.). Intended to be included from quaternion kernels and,
-  where needed, from pose code; `pose.cuh` does not duplicate these primitives.
-- `quaternion.cu`: `__global__` wrappers that delegate to the `*_device`
+  where needed, from pose code; `pose.hip.h` does not duplicate these primitives.
+- `quaternion.hip`: `__global__` wrappers that delegate to the `*_device`
   functions, `launch_*` templates, `AT_DISPATCH_FLOATING_TYPES`, and the exported
   quaternion operators.
 
-**`pose.cuh` / `pose.cu`**
+**`pose.hip.h` / `pose.hip`**
 
-- `pose.cuh` includes `quaternion.cuh` so pose and trajectory kernels can reuse
+- `pose.hip.h` includes `quaternion.hip.h` so pose and trajectory kernels can reuse
   quaternion device math **without** introducing a third shared-only device
   header. It adds pose-specific device helpers (e.g. Shepperd matrix→quaternion,
-  SE3 transforms, trajectory orchestration using quaternion.cuh templates)
+  SE3 transforms, trajectory orchestration using quaternion.hip.h templates)
   and the pose `*_device` entry bodies.
-- `pose.cu` mirrors the quaternion pattern: globals, launches, and exported
+- `pose.hip` mirrors the quaternion pattern: globals, launches, and exported
   pose/trajectory CUDA entry points.
 
 **Pattern summary**
 
 | Location | Role |
 | -------- | ---- |
-| `*.cuh` | `#pragma once`, device functions and templates callable from device code |
-| `*.cu` | Host-side launch code, `__global__` kernels, PyTorch dispatch, exports |
+| `*.hip.h` | `#pragma once`, device functions and templates callable from device code |
+| `*.hip` | Host-side launch code, `__global__` kernels, PyTorch dispatch, exports |
 
 This keeps reusable math colocated with the module that owns it (quaternion),
 while preserving a strict one-header-per-translation-unit pairing for the top-level
@@ -341,7 +341,7 @@ The test suite verifies that:
 - Public geometry functions are defined in `functional/`.
 - Backend implementation details are defined in `kernels/`.
 - Reserve `include/` for shared public or host-side headers; keep CUDA device
-  helpers with their owning sources under `kernels/cuda/csrc/`.
+  helpers with their owning sources under `kernels/hip/csrc/`.
 - The package remains conceptually organized around geometry concepts first and
   implementation details second.
 - Directory structure should make it clear which code is public, which code is

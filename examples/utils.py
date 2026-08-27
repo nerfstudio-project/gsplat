@@ -103,7 +103,7 @@ class AppearanceOptModule(torch.nn.Module):
         Returns:
             colors: (C, N, 3)
         """
-        from gsplat.cuda._torch_impl import _eval_sh_bases_fast
+        from gsplat.hip._torch_impl import _eval_sh_bases_fast
 
         C, N = dirs.shape[:2]
         # Camera embeddings

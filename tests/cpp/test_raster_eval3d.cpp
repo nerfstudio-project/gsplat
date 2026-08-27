@@ -10,16 +10,16 @@
 #include <string>
 #include <tuple>
 
-#include <torch/cuda.h>
+#include <torch/extension.h>
 #include <torch/torch.h>
 
 #include "Config.h"
 #include "ExternalDistortion.h"
 #include "Intersect.h"
 #include "PrimingChainEncoding.h"
-#include "PrimingChainEncoding.cuh"
+#include "PrimingChainEncoding.hip.h"
 #include "Projection.h"
-#include "RasterizeCSR.cuh"
+#include "RasterizeCSR.hip.h"
 #include "Rasterization.h"
 
 namespace

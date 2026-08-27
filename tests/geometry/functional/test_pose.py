@@ -90,7 +90,7 @@ GC_TRAJ_EPS = 1e-3
 GC_TRAJ_ATOL = 5e-2
 GC_TRAJ_RTOL = 5e-2
 
-# Shepperd branch selection in pose.cuh (must match CUDA exactly).
+# Shepperd branch selection in pose.hip.h (must match CUDA exactly).
 def _shepperd_branch_from_R(R: torch.Tensor) -> int:
     """Return branch index 0..3 for a single 3x3 rotation matrix (row-major rows)."""
     r00, r01, r02 = R[0, 0], R[0, 1], R[0, 2]
@@ -301,7 +301,7 @@ class TestSE3Pose(unittest.TestCase):
         )
 
     def test_se3pose_from_matrix_shepperd_branch_boundaries_forward(self):
-        """Forward round-trip on rotations near Shepperd branch seams (pose.cuh).
+        """Forward round-trip on rotations near Shepperd branch seams (pose.hip.h).
 
         Branch logic compares ``trace`` to diagonals, then ``r00`` vs ``r11`` vs ``r22``.
         We build valid rotation matrices via axis-angle, sweep angles that cross those

@@ -21,17 +21,17 @@ from gsplat._lazy_backend import make_lazy_backend
 
 
 def _build():
-    # Deferred so importing this module does not import .cuda.build.
-    from .cuda.build import build_and_load_geometry_cuda
+    # Deferred so importing this module does not import .hip.build.
+    from .hip.build import build_and_load_geometry_hip
 
-    return build_and_load_geometry_cuda()
+    return build_and_load_geometry_hip()
 
 
 _get_backend, __getattr__ = make_lazy_backend(
     module_name=__name__,
-    public_name="_GEOMETRY_CUDA",
-    prebuilt_module="gsplat_geometry_cuda",
+    public_name="_GEOMETRY_HIP",
+    prebuilt_module="gsplat_geometry_hip",
     jit_loader=_build,
 )
 
-__all__ = ["_GEOMETRY_CUDA"]
+__all__ = ["_GEOMETRY_HIP"]

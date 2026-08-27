@@ -31,7 +31,7 @@ from gsplat.geometry.kernels.quaternion_ops import SLERP_SMALL_ANGLE_DOT_THRESHO
 
 from .. import _backend
 
-_backend._SENSORS_CUDA  # noqa: B018  # ensures torch.ops gsplat_sensors registrations exist
+_backend._SENSORS_HIP  # noqa: B018  # ensures torch.ops gsplat_sensors registrations exist
 from ..common.pose import DynamicPose, Pose, Trajectory
 from .types import (
     BivariateWindshieldDistortion,

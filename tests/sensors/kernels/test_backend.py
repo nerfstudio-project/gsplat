@@ -15,7 +15,7 @@
 
 import torch
 
-from gsplat.sensors.kernels._backend import _SENSORS_CUDA as _C
+from gsplat.sensors.kernels._backend import _SENSORS_HIP as _C
 
 
 def test_extension_loads():

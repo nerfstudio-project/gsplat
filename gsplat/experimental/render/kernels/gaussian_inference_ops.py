@@ -30,7 +30,7 @@ def _require_backend():
     if _backend._C is None:
         raise RuntimeError(
             "Inference CUDA backend is not available. "
-            "Ensure CUDA toolkit is installed and the extension compiled."
+            "Ensure ROCm/HIP toolkit is installed and the extension compiled."
         )
     return _backend._C
 

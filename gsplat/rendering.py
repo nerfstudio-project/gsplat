@@ -26,7 +26,7 @@ from typing_extensions import Literal
 from .trace import trace_function
 from .profile import capture_inputs
 
-from .cuda._wrapper import (
+from .hip._wrapper import (
     RollingShutterType,
     CameraModel,
     FThetaCameraDistortionParameters,
@@ -131,7 +131,7 @@ def _renderer_config_type(renderer_config: RendererConfig) -> Any:
     )
 
 
-# TODO: RenderMode should be an enum so that we can add these query methods to it.
+# Note: RenderMode should be an enum so that we can add these query methods to it.
 # The problem is that it'd break backward compatibllity due to some symbols used, e.g. RGB+D or RGB-d.
 def render_mode_has_color(mode: RenderMode) -> bool:
     return mode in {"RGB", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"}
@@ -701,11 +701,9 @@ def _maybe_evaluate_sh(
             # features is already [..., C, N, D]
             pass
     else:
-        camtoworlds = torch.inverse(viewmats)  # [..., C, 4, 4]
-        dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]  # [..., C, N, 3]
         masks = (radii > 0).all(dim=-1)  # [..., C, N]
         features = spherical_harmonics(
-            sh_degree, dirs, features, masks=masks
+            sh_degree, means, viewmats, features, masks=masks
         )  # [..., C, N, D]
         if clamp:
             # make it apple-to-apple with Inria's CUDA Backend.
@@ -762,13 +760,13 @@ def _rasterization(
         Compared to rasterization(), this function does not support some arguments such as
         `packed`, `sparse_grad` and `absgrad`.
     """
-    from gsplat.cuda._torch_impl import (
+    from gsplat.hip._torch_impl import (
         _fully_fused_projection,
         _rasterize_to_pixels,
     )
-    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
-    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
-    from gsplat.cuda._math import _quat_scale_to_covar_preci
+    from gsplat.hip._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.hip._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.hip._math import _quat_scale_to_covar_preci
 
     if lidar_coeffs is not None:
         width = lidar_coeffs.n_columns
@@ -1126,7 +1124,7 @@ def _rasterization(
 #         the intermidiate variables, and only return an empty dict.
 
 #     """
-#     from gsplat.cuda_legacy._wrapper import (
+#     from gsplat.hip_legacy._wrapper import (
 #         project_gaussians,
 #         rasterize_gaussians,
 #         spherical_harmonics,

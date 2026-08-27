@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+﻿# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
@@ -30,7 +30,7 @@ GTEST_FILTER_ARG_LIMIT = 16000
 # 2. When C++ tests exist, collection calls build_cpp_tests(), which resolves
 #    the gsplat implementation object files via get_gsplat_link_inputs():
 #      - If gsplat.csrc is already loaded (setup.py / editable install), reuse
-#        the .o files under <repo>/build/temp.*-cpython-<tag>/gsplat/cuda/ —
+#        the .o files under <repo>/build/temp.*-cpython-<tag>/gsplat/hip/ —
 #        same artifacts that produced the loaded csrc.so, so ABI matches.
 #      - Otherwise (pure JIT environment), trigger the gsplat JIT build and
 #        use the resulting .o files.
@@ -140,12 +140,12 @@ def _cpp_tests_can_run() -> tuple[bool, str | None]:
         """Return whether PyTorch can find CUDA without importing gsplat."""
         if torch.version.cuda is None:
             return False
-        cuda_home = jit.CUDA_HOME
-        if cuda_home:
-            nvcc = os.path.join(cuda_home, "bin", "nvcc")
-            if os.path.isfile(nvcc):
+        rocm_home = os.environ.get("ROCM_HOME") or os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH")
+        if rocm_home:
+            hipcc = os.path.join(rocm_home, "bin", "hipcc")
+            if os.path.isfile(hipcc):
                 return True
-        return shutil.which("nvcc") is not None
+        return shutil.which("hipcc") is not None
 
     if os.getenv("BUILD_NO_CUDA", "0") == "1":
         return False, "gsplat CUDA extension is disabled by BUILD_NO_CUDA=1"
@@ -154,7 +154,7 @@ def _cpp_tests_can_run() -> tuple[bool, str | None]:
 
     # When gsplat.csrc is loaded but setup.py artifacts are missing or mismatched,
     # translate that into a clean pytest skip with the same diagnostic message.
-    from gsplat.cuda.build import (
+    from gsplat.hip.build import (
         get_build_parameters,
         get_gsplat_link_inputs_skip_reason,
     )
@@ -183,9 +183,9 @@ def _runtime_env() -> dict[str, str]:
     if os.name == "nt":
         # Windows resolves DLLs through PATH, not LD_LIBRARY_PATH. Add both
         # torch's DLL directory and CUDA's bin directory when they exist.
-        cuda_bin = os.path.join(jit.CUDA_HOME, "bin") if jit.CUDA_HOME else None
+        rocm_bin = os.path.join(rocm_home, "bin") if rocm_home else None
         torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
-        prepend_env_path(env, "PATH", [torch_lib, cuda_bin])
+        prepend_env_path(env, "PATH", [torch_lib, rocm_bin])
     else:
         # On Linux CI, torch.utils.cpp_extension already knows the CUDA and
         # torch library directories that should be visible at runtime.
@@ -300,8 +300,8 @@ def _include_paths(build_params) -> list[str]:
     gmock_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googlemock")
     return [
         REPO_ROOT,
-        os.path.join(REPO_ROOT, "gsplat", "cuda"),
-        os.path.join(REPO_ROOT, "gsplat", "cuda", "csrc"),
+        os.path.join(REPO_ROOT, "gsplat", "hip"),
+        os.path.join(REPO_ROOT, "gsplat", "hip", "csrc"),
         os.path.join(gtest_root, "include"),
         gtest_root,
         os.path.join(gmock_root, "include"),
@@ -318,14 +318,14 @@ def _cflags(build_params) -> list[str]:
 
 def _cuda_cflags(build_params) -> list[str]:
     """Return CUDA compile flags compatible with both gsplat and test sources."""
-    # Mirror _cflags for nvcc. gsplat's CUDA flags carry the C++ standard, the
-    # gsplat -D defines, and diagnostic suppressions; without them a test .cu
-    # falls back to PyTorch's default nvcc standard (one behind the rest of the
+    # Mirror _cflags for hipcc. gsplat's CUDA flags carry the C++ standard, the
+    # gsplat -D defines, and diagnostic suppressions; without them a test .hip
+    # falls back to PyTorch's default hipcc standard (one behind the rest of the
     # build) and misses gsplat's macros. Drop only the -Werror policy so it never
-    # applies to test-only CUDA TUs -- nvcc spells it `-Xcompiler=-Werror` and
+    # applies to test-only CUDA TUs -- hipcc spells it `-Xcompiler=-Werror` and
     # `--Werror all-warnings`.
     werror = {"-Xcompiler=-Werror", "--Werror", "all-warnings"}
-    from gsplat.cuda.build import format_jit_cuda_cflags
+    from gsplat.hip.build import format_jit_cuda_cflags
 
     return format_jit_cuda_cflags(
         [flag for flag in build_params.extra_cuda_cflags if flag not in werror]
@@ -427,7 +427,7 @@ def build_cpp_tests() -> str:
     # Keep gsplat imports lazy. Importing this test module should define pytest
     # hooks only; it should not build or import the CUDA extension during pytest
     # startup paths such as `pytest --help`.
-    from gsplat.cuda.build import (
+    from gsplat.hip.build import (
         get_build_parameters,
         get_gsplat_link_inputs,
         get_gsplat_link_inputs_skip_reason,

@@ -69,7 +69,7 @@ except ModuleNotFoundError as e:
         "scene/stage helper packages, which ship with gsplat. Install gsplat with:\n"
         "    python -m pip install -e ."
     ) from e
-from gsplat.cuda._wrapper import CameraModel
+from gsplat.hip._wrapper import CameraModel
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
@@ -369,7 +369,7 @@ def create_splats_with_optimizers(
         name: optimizer_class(
             [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
             eps=1e-15 / math.sqrt(BS),
-            # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
+            # Note: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
             fused=True,
         )

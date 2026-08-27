@@ -21,7 +21,7 @@ from typing import Tuple, Callable
 from nerfview import Viewer, RenderTabState
 
 from gsplat.rendering import RasterizeMode
-from gsplat.cuda._wrapper import CameraModel
+from gsplat.hip._wrapper import CameraModel
 
 
 class GsplatRenderTabState(RenderTabState):

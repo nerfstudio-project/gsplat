@@ -1,12 +1,12 @@
 include config.yaml
 
-recursive-include gsplat/cuda/csrc *
-recursive-include gsplat/cuda/include *
-include gsplat/cuda/ext.cpp
+recursive-include gsplat/hip/csrc *
+recursive-include gsplat/hip/include *
+include gsplat/hip/ext.cpp
 
-# CUDA / JIT sources for the sub-packages, so that source distributions can
+# HIP / JIT sources for the sub-packages, so that source distributions can
 # JIT-build them. test_data and tests are intentionally not shipped.
-recursive-include gsplat/geometry/kernels/cuda *
-recursive-include gsplat/sensors/kernels/cuda *
-recursive-include gsplat/scene/kernels/cuda *
-recursive-include gsplat/experimental/render/kernels/cuda *
+recursive-include gsplat/geometry/kernels/hip *
+recursive-include gsplat/sensors/kernels/hip *
+recursive-include gsplat/scene/kernels/hip *
+recursive-include gsplat/experimental/render/kernels/hip *

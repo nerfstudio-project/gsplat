@@ -16,7 +16,7 @@
 """Shared collection guard for the native-extension test suites.
 
 Each of tests/{geometry,sensors,experimental} sets
-``collect_ignore_glob = cuda_collect_ignore_glob(...)`` so CUDA-only tests are
+``collect_ignore_glob = cuda_collect_ignore_glob(...)`` so HIP-only tests are
 de-collected — rather than ERRORing at import-time collection — on hosts that
 cannot run them. Centralized here so the policy lives in one place.
 """

@@ -100,7 +100,7 @@ def make_grid_image_points(device: torch.device) -> Tensor:
 def _ftheta_eval_poly(coeffs: Tensor, x: Tensor, degree: int) -> Tensor:
     """Standard power-basis polynomial r = sum_i c_i * x^i over i in [0, degree].
 
-    Mirrors the device-side ``ftheta_poly_eval`` in ``ftheta_kernel.cuh``
+    Mirrors the device-side ``ftheta_poly_eval`` in ``ftheta_kernel.hip.h``
     (constant term INCLUDED at i=0).
     """
     result = torch.zeros_like(x)
@@ -148,7 +148,7 @@ def torch_ftheta_project(
     """Pure-torch reference for the FTheta forward projection.
 
     Mirrors ``ftheta_project_ray`` in
-    ``gsplat/sensors/kernels/cuda/csrc/ftheta_kernel.cuh`` (BACKWARD-ref
+    ``gsplat/sensors/kernels/hip/csrc/ftheta_kernel.hip.h`` (BACKWARD-ref
     branch invokes Newton inversion). Operates on float64 inputs with
     high-precision intermediates so it can serve as a gradient/forward
     oracle for the float32 CUDA kernel.

@@ -43,7 +43,7 @@ The value is a comma-delimited list of specs, each of the form
 - `<path>:<start>:<stop>:<step>` captures strided calls
 
 Multiple specs let you capture different call indices to different output
-paths in a single run — useful when one process makes several kinds of
+paths in a single run â€” useful when one process makes several kinds of
 rasterization calls (e.g. a camera pass followed by a lidar pass) and you
 want each written to its own file. The call-index ranges across specs must
 not overlap.
@@ -157,7 +157,7 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 import torch
 from torch.utils._pytree import tree_map
 
-# NOTE: do NOT import anything from the ``gsplat`` package at module scope —
+# NOTE: do NOT import anything from the ``gsplat`` package at module scope â€”
 # importing ``gsplat`` runs its ``__init__.py``, which pulls in the CUDA
 # wrapper modules and triggers JIT compilation of the C++ extension. Users
 # of ``capture_inputs`` (notably ``gsplat.rendering``) should be able to
@@ -586,7 +586,7 @@ def _build_profile_loss_contribution(
     fused_gaussian_losses: torch.nn.Module | None = None
 
     if "gaussian_fused" in losses:
-        from gsplat.cuda._wrapper import has_losses
+        from gsplat.hip._wrapper import has_losses
         from gsplat.losses_fused import FusedGaussianLosses
 
         if not has_losses():
@@ -993,9 +993,9 @@ def capture_inputs(*, envvar: str) -> Callable[[_F], _F]:
     ``<output_path>:<range_spec>``.
 
     <range_spec> follows Python range() / tensor-slice conventions:
-      - ``stop``             — capture calls 0, 1, ..., stop-1
-      - ``start:stop``       — capture calls start, start+1, ..., stop-1
-      - ``start:stop:step``  — capture calls start, start+step, ..., < stop
+      - ``stop``             â€” capture calls 0, 1, ..., stop-1
+      - ``start:stop``       â€” capture calls start, start+1, ..., stop-1
+      - ``start:stop:step``  â€” capture calls start, start+step, ..., < stop
 
     Within each spec, integers are scanned from the right; everything to the
     left of them is the output path.  If the path is relative and
@@ -1097,7 +1097,7 @@ def capture_inputs(*, envvar: str) -> Callable[[_F], _F]:
         if not specs:
             raise ValueError(f"{envvar}: no specs provided, got {env!r}")
 
-        # Ensure call-index ranges don't overlap across specs — otherwise we'd
+        # Ensure call-index ranges don't overlap across specs â€” otherwise we'd
         # need an arbitrary tie-break when a call matches several specs.
         seen_calls: dict[int, int] = {}
         for spec_idx, (_stem, _ext, capture_range) in enumerate(specs):
@@ -1493,11 +1493,11 @@ def main() -> None:
                 "rays unused on this path)"
             )
         else:
-            from gsplat.cuda._torch_impl_eval3d import (
+            from gsplat.hip._torch_impl_eval3d import (
                 _BaseCameraModel,
                 _generate_rays,
             )
-            from gsplat.cuda._wrapper import RollingShutterType
+            from gsplat.hip._wrapper import RollingShutterType
 
             original_viewmats = replay_inputs["viewmats"]
             # Preserve any leading batch dims; rasterization() requires

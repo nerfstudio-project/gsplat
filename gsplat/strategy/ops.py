@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from gsplat.scene import Scene
 
 _MCMC_BACKEND_TORCH = {"torch", "pytorch", "py"}
-_MCMC_BACKEND_CUDA = {"cuda", "native", ""}
+_MCMC_BACKEND_CUDA = {"hip", "native", ""}
 DEFAULT_MCMC_OPACITY_T = 0.005
 DEFAULT_MCMC_OPACITY_K = 100.0
 _raw = os.environ.get("GSPLAT_MCMC_BACKEND", "").strip().lower()
@@ -417,10 +417,10 @@ def _cuda_fused_mcmc_perturb(
 
     positions must be contiguous (mutated in-place); other tensors are made contiguous
     via .contiguous() since the kernel only reads them. See
-    gsplat/cuda/csrc/MCMCPerturbCUDA.cu for the kernel.
+    gsplat/hip/csrc/MCMCPerturbCUDA.hip for the kernel.
     """
     try:
-        from gsplat.cuda._backend import _C
+        from gsplat.hip._backend import _C
     except ImportError:
         _C = None  # type: ignore[assignment]
     if _C is None or not positions.is_cuda:

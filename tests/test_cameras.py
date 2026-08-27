@@ -33,12 +33,12 @@ from dataclasses import dataclass
 if not torch.cuda.is_available():
     pytest.skip("CUDA required for camera model tests", allow_module_level=True)
 
-from gsplat.cuda._backend import _C
+from gsplat.hip._backend import _C
 
 if _C is None:
     pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
 
-from gsplat.cuda._wrapper import has_camera_wrappers
+from gsplat.hip._wrapper import has_camera_wrappers
 
 if not has_camera_wrappers():
     pytest.skip(
@@ -47,14 +47,14 @@ if not has_camera_wrappers():
     )
 
 from gsplat._helper import expand_named_params
-from gsplat.cuda._torch_cameras import (  # PyTorch reference
+from gsplat.hip._torch_cameras import (  # PyTorch reference
     _BaseCameraModel,
     _PerfectPinholeCameraModel,
     _OpenCVPinholeCameraModel,
     _OpenCVFisheyeCameraModel,
     _FThetaCameraModel,
 )
-from gsplat.cuda._torch_lidars import (  # PyTorch reference
+from gsplat.hip._torch_lidars import (  # PyTorch reference
     _RowOffsetStructuredSpinningLidarModel,
 )
 from gsplat._helper import (
@@ -62,7 +62,7 @@ from gsplat._helper import (
     assert_close,
     assert_close_with_boundary_band,
 )
-from gsplat.cuda._wrapper import (
+from gsplat.hip._wrapper import (
     RollingShutterType,
     FThetaPolynomialType,
     FThetaCameraDistortionParameters,
@@ -75,7 +75,7 @@ from gsplat import (
     RowOffsetStructuredSpinningLidarModelParameters,
     RowOffsetStructuredSpinningLidarModelParametersExt,
 )
-from gsplat.cuda._math import (
+from gsplat.hip._math import (
     _quat_multiply,
     _safe_normalize,
     compute_inverse_polynomial,
@@ -665,7 +665,7 @@ def pose_end(batch_dims, pose_start, rs_type, ref_camera):
 
     # Rotation angle during rolling shutter readout, 2 degrees max
     # Translation delta: max 10% focal length
-    # TODO: these should be dependent on the camera's focal length and image dimensions!
+    # Note: these should be dependent on the camera's focal length and image dimensions!
     angle_delta = (torch.rand(*shape, 1, device=device) - 0.5) * 2 * torch.pi / 180
     translation_delta = (
         (torch.randn(*shape, 3, device=device) - 0.5)
@@ -835,7 +835,7 @@ class TestCameraModels:
         #       * 493/N_band  (1.52% of total)  ftheta[pinhole+p2a] arms
         #       * ~510/N_band (1.57% of total)  ftheta[p2a] arms
         #     all geometrically inside image bounds (Newton convergence flip)
-        #   - asymmetry: 243 vs 250 (cuda-only-valid vs ref-only-valid)
+        #   - asymmetry: 243 vs 250 (HIP-only-valid vs ref-only-valid)
         #     -> |delta|/sum = 7/493 = 0.014, well under 0.5 cap
         # RTX PRO 6000:
         #   - in-band flips: ~0.23% of total (well under any budget)

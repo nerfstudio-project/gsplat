@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+﻿# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,7 +16,7 @@
 """Shared lazy native-extension loader for gsplat subpackages.
 
 Several gsplat subpackages (``gsplat.geometry``, ``gsplat.scene``,
-``gsplat.sensors``) load a native CUDA extension with the same policy: import a
+``gsplat.sensors``) load a native HIP extension with the same policy: import a
 prebuilt extension if present, otherwise JIT-build it, otherwise raise. Loading
 must be *lazy* — importing the package (and its ``functional`` API) on a
 CPU-only machine must not build or import the extension — so the extension is
@@ -28,17 +28,17 @@ wires it in as::
 
     from gsplat._lazy_backend import make_lazy_backend
 
-    def _build():  # deferred so importing _backend doesn't import .cuda.build
-        from .cuda.build import build_and_load_geometry_cuda
-        return build_and_load_geometry_cuda()
+    def _build():  # deferred so importing _backend doesn't import .hip.build
+        from .hip.build import build_and_load_geometry_hip
+        return build_and_load_geometry_hip()
 
     _get_backend, __getattr__ = make_lazy_backend(
         module_name=__name__,
-        public_name="_GEOMETRY_CUDA",
-        prebuilt_module="gsplat_geometry_cuda",
+        public_name="_GEOMETRY_HIP",
+        prebuilt_module="gsplat_geometry_hip",
         jit_loader=_build,
     )
-    __all__ = ["_GEOMETRY_CUDA"]
+    __all__ = ["_GEOMETRY_HIP"]
 
 The returned ``__getattr__`` resolves ``public_name`` on first access (and works
 for ``from ..._backend import <public_name>``); any other attribute raises
@@ -56,29 +56,21 @@ from typing import Callable
 _UNSET = object()
 
 
-def cuda_toolkit_available() -> bool:
-    """Return True if a usable CUDA toolkit (nvcc) is discoverable.
-
-    Shared by the native-extension loaders so the probe lives in one place.
-    ``torch.utils.cpp_extension`` is imported lazily so importing this module
-    (and therefore the lazy ``_backend`` modules) stays cheap.
-    """
+def hip_toolkit_available() -> bool:
+    """Return True if a usable ROCm/HIP compiler is discoverable."""
     from subprocess import DEVNULL, call
 
-    import torch.utils.cpp_extension as jit
-
-    cuda_home = jit._find_cuda_home()  # tries various heuristics
-    if not cuda_home:
+    candidates = []
+    for key in ("ROCM_HOME", "HIP_PATH", "ROCM_PATH"):
+        root = os.getenv(key)
+        if root:
+            candidates.append(os.path.join(root, "bin", "hipcc"))
+    if any(os.path.isfile(path) for path in candidates):
+        return True
+    try:
+        return call(["hipcc", "--version"], stdout=DEVNULL, stderr=DEVNULL) == 0
+    except FileNotFoundError:
         return False
-    nvcc_path = os.path.join(cuda_home, "bin", "nvcc")
-    if not os.path.isfile(nvcc_path):
-        # Maybe still on PATH; try invoking nvcc directly.
-        try:
-            call(["nvcc"], stdout=DEVNULL, stderr=DEVNULL)
-            return True
-        except FileNotFoundError:
-            return False
-    return True
 
 
 def make_lazy_backend(
@@ -87,7 +79,7 @@ def make_lazy_backend(
     public_name: str,
     prebuilt_module: str,
     jit_loader: Callable[[], object],
-    force_jit_env: str | None = None,
+    FORCE_JIT_env: str | None = None,
 ):
     """Build the lazy loader + module ``__getattr__`` for a native extension.
 
@@ -95,13 +87,13 @@ def make_lazy_backend(
         module_name: ``__name__`` of the calling ``_backend`` module (for error
             messages).
         public_name: Sentinel attribute that triggers loading on first access
-            (e.g. ``"_GEOMETRY_CUDA"``).
+            (e.g. ``"_GEOMETRY_HIP"``).
         prebuilt_module: Importable name of the prebuilt extension (e.g.
-            ``"gsplat_geometry_cuda"``).
+            ``"gsplat_geometry_hip"``).
         jit_loader: Zero-arg callable that JIT-builds and returns the extension
-            when the prebuilt import is unavailable. Keep its ``.cuda.build``
+            when the prebuilt import is unavailable. Keep its ``.hip.build``
             import inside the callable so importing ``_backend`` stays cheap.
-        force_jit_env: Optional env var name; when set to ``"1"`` the prebuilt
+        FORCE_JIT_env: Optional env var name; when set to ``"1"`` the prebuilt
             import is skipped and ``jit_loader`` is used directly (handy when
             iterating on the native sources locally).
 
@@ -123,7 +115,7 @@ def make_lazy_backend(
                 raise result
             return result
 
-        forced_jit = bool(force_jit_env and os.getenv(force_jit_env, "0") == "1")
+        forced_jit = bool(FORCE_JIT_env and os.getenv(FORCE_JIT_env, "0") == "1")
         backend = None
         prebuilt_error = None
         if not forced_jit:
@@ -137,7 +129,7 @@ def make_lazy_backend(
                 backend = jit_loader()
             except Exception as jit_error:
                 prebuilt_note = (
-                    f"prebuilt import skipped ({force_jit_env}=1)"
+                    f"prebuilt import skipped ({FORCE_JIT_env}=1)"
                     if forced_jit
                     else f"prebuilt import error: {prebuilt_error!r}"
                 )

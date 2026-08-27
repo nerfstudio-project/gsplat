@@ -10,7 +10,7 @@ import pickle
 import pytest
 import torch
 
-from gsplat.cuda._wrapper import (
+from gsplat.hip._wrapper import (
     BivariateWindshieldModelParameters,
     ExternalDistortionReferencePolynomial,
     FThetaCameraDistortionParameters,

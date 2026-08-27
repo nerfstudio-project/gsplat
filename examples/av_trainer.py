@@ -108,13 +108,13 @@ def load_scene(path: str, device: str = "cuda") -> SimpleNamespace:
 
 def _build_lidar_renderer(ncore_lidar_model, device: str = "cuda"):
     """Build gsplat LiDAR renderer params from NCore LiDAR model."""
-    from gsplat.cuda._lidar import (
+    from gsplat.hip._lidar import (
         RowOffsetStructuredSpinningLidarModelParameters as GsplatLidarParams,
         SpinningDirection,
         compute_angles_to_columns_map,
         compute_tiling,
     )
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         RowOffsetStructuredSpinningLidarModelParametersExt,
     )
 

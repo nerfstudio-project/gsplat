@@ -42,7 +42,7 @@ from gsplat.rendering import (
     render_mode_has_depth_channel,
     render_mode_has_hit_distance,
 )
-from gsplat.cuda._constants import ALPHA_THRESHOLD
+from gsplat.hip._constants import ALPHA_THRESHOLD
 
 device = torch.device("cuda:0")
 
@@ -803,7 +803,7 @@ def test_rasterization_distributed_rejects_unsupported_configs(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_external_distortion_requires_ut():
-    from gsplat.cuda._wrapper import BivariateWindshieldModelParameters
+    from gsplat.hip._wrapper import BivariateWindshieldModelParameters
 
     kwargs = _make_distributed_validation_scene()
     # Pass a real bound custom-class instance so marshalling reaches the C++

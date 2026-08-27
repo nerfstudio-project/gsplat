@@ -469,7 +469,7 @@ class SE3PoseTransformPointFunction(torch.autograd.Function):
         translation = translation.contiguous()
         rotation = rotation.contiguous()
         point = point.contiguous()
-        result = _backend._GEOMETRY_CUDA.se3pose_transform_point(
+        result = _backend._GEOMETRY_HIP.se3pose_transform_point(
             translation, rotation, point
         )
         ctx.save_for_backward(translation, rotation, point, result)
@@ -484,7 +484,7 @@ class SE3PoseTransformPointFunction(torch.autograd.Function):
             grad_translation,
             grad_rotation,
             grad_point,
-        ) = _backend._GEOMETRY_CUDA.se3pose_transform_point_bwd(
+        ) = _backend._GEOMETRY_HIP.se3pose_transform_point_bwd(
             translation, rotation, point, grad_result
         )
         return grad_translation, grad_rotation, grad_point
@@ -500,7 +500,7 @@ class SE3PoseTransformDirectionFunction(torch.autograd.Function):
         translation = translation.contiguous()
         rotation = rotation.contiguous()
         direction = direction.contiguous()
-        result = _backend._GEOMETRY_CUDA.se3pose_transform_direction(
+        result = _backend._GEOMETRY_HIP.se3pose_transform_direction(
             translation, rotation, direction
         )
         ctx.save_for_backward(translation, rotation, direction, result)
@@ -515,7 +515,7 @@ class SE3PoseTransformDirectionFunction(torch.autograd.Function):
             grad_translation,
             grad_rotation,
             grad_direction,
-        ) = _backend._GEOMETRY_CUDA.se3pose_transform_direction_bwd(
+        ) = _backend._GEOMETRY_HIP.se3pose_transform_direction_bwd(
             translation, rotation, direction, grad_result
         )
         return grad_translation, grad_rotation, grad_direction
@@ -531,7 +531,7 @@ class SE3PoseInverseTransformPointFunction(torch.autograd.Function):
         translation = translation.contiguous()
         rotation = rotation.contiguous()
         point = point.contiguous()
-        result = _backend._GEOMETRY_CUDA.se3pose_inverse_transform_point(
+        result = _backend._GEOMETRY_HIP.se3pose_inverse_transform_point(
             translation, rotation, point
         )
         ctx.save_for_backward(translation, rotation, point, result)
@@ -546,7 +546,7 @@ class SE3PoseInverseTransformPointFunction(torch.autograd.Function):
             grad_translation,
             grad_rotation,
             grad_point,
-        ) = _backend._GEOMETRY_CUDA.se3pose_inverse_transform_point_bwd(
+        ) = _backend._GEOMETRY_HIP.se3pose_inverse_transform_point_bwd(
             translation, rotation, point, grad_result
         )
         return grad_translation, grad_rotation, grad_point
@@ -562,7 +562,7 @@ class SE3PoseInverseTransformDirectionFunction(torch.autograd.Function):
         translation = translation.contiguous()
         rotation = rotation.contiguous()
         direction = direction.contiguous()
-        result = _backend._GEOMETRY_CUDA.se3pose_inverse_transform_direction(
+        result = _backend._GEOMETRY_HIP.se3pose_inverse_transform_direction(
             translation, rotation, direction
         )
         ctx.save_for_backward(translation, rotation, direction, result)
@@ -577,7 +577,7 @@ class SE3PoseInverseTransformDirectionFunction(torch.autograd.Function):
             grad_translation,
             grad_rotation,
             grad_direction,
-        ) = _backend._GEOMETRY_CUDA.se3pose_inverse_transform_direction_bwd(
+        ) = _backend._GEOMETRY_HIP.se3pose_inverse_transform_direction_bwd(
             translation, rotation, direction, grad_result
         )
         return grad_translation, grad_rotation, grad_direction
@@ -598,7 +598,7 @@ class SE3PoseComposeFunction(torch.autograd.Function):
         parent_rotation = parent_rotation.contiguous()
         child_translation = child_translation.contiguous()
         child_rotation = child_rotation.contiguous()
-        out_translation, out_rotation = _backend._GEOMETRY_CUDA.se3pose_compose(
+        out_translation, out_rotation = _backend._GEOMETRY_HIP.se3pose_compose(
             parent_translation,
             parent_rotation,
             child_translation,
@@ -630,7 +630,7 @@ class SE3PoseComposeFunction(torch.autograd.Function):
             grad_out_rotation = torch.zeros_like(parent_rotation)
         else:
             grad_out_rotation = grad_out_rotation.contiguous()
-        return _backend._GEOMETRY_CUDA.se3pose_compose_bwd(
+        return _backend._GEOMETRY_HIP.se3pose_compose_bwd(
             parent_translation,
             parent_rotation,
             child_translation,
@@ -648,7 +648,7 @@ class SE3PoseFromMatrixFunction(torch.autograd.Function):
         matrix = matrix.contiguous()
         N = matrix.shape[0]
         if N > 0:
-            translation, rotation = _backend._GEOMETRY_CUDA.se3pose_from_matrix(matrix)
+            translation, rotation = _backend._GEOMETRY_HIP.se3pose_from_matrix(matrix)
         else:
             translation = torch.zeros((N, 3), device=matrix.device, dtype=matrix.dtype)
             rotation = torch.zeros((N, 4), device=matrix.device, dtype=matrix.dtype)
@@ -665,7 +665,7 @@ class SE3PoseFromMatrixFunction(torch.autograd.Function):
         grad_translation = grad_translation.contiguous()
         grad_rotation = grad_rotation.contiguous()
         if ctx.N > 0:
-            grad_matrix = _backend._GEOMETRY_CUDA.se3pose_from_matrix_bwd(
+            grad_matrix = _backend._GEOMETRY_HIP.se3pose_from_matrix_bwd(
                 matrix, grad_translation, grad_rotation
             )
         else:
@@ -681,7 +681,7 @@ class SE3PoseToMatrixFunction(torch.autograd.Function):
         translation = translation.contiguous()
         rotation = rotation.contiguous()
         N = translation.shape[0]
-        result = _backend._GEOMETRY_CUDA.se3pose_to_matrix(translation, rotation)
+        result = _backend._GEOMETRY_HIP.se3pose_to_matrix(translation, rotation)
         ctx.save_for_backward(translation, rotation, result)
         ctx.N = N
         return result.reshape(N, 4, 4)
@@ -691,7 +691,7 @@ class SE3PoseToMatrixFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         translation, rotation, result = ctx.saved_tensors
         grad_result = grad_result.reshape(ctx.N, 16).contiguous()
-        grad_translation, grad_rotation = _backend._GEOMETRY_CUDA.se3pose_to_matrix_bwd(
+        grad_translation, grad_rotation = _backend._GEOMETRY_HIP.se3pose_to_matrix_bwd(
             translation, rotation, grad_result
         )
         return grad_translation, grad_rotation
@@ -710,7 +710,7 @@ class SE3PoseToInverseMatrixFunction(torch.autograd.Function):
         translation = translation.contiguous()
         rotation = rotation.contiguous()
         N = translation.shape[0]
-        result = _backend._GEOMETRY_CUDA.se3pose_to_inverse_matrix(
+        result = _backend._GEOMETRY_HIP.se3pose_to_inverse_matrix(
             translation, rotation, wxyz_format
         )
         ctx.save_for_backward(translation, rotation, result)
@@ -726,7 +726,7 @@ class SE3PoseToInverseMatrixFunction(torch.autograd.Function):
         (
             grad_translation,
             grad_rotation,
-        ) = _backend._GEOMETRY_CUDA.se3pose_to_inverse_matrix_bwd(
+        ) = _backend._GEOMETRY_HIP.se3pose_to_inverse_matrix_bwd(
             translation, rotation, ctx.wxyz_format, grad_result
         )
         return grad_translation, grad_rotation, None
@@ -758,7 +758,7 @@ class TrajectoryTransformPoint2PosesFunction(torch.autograd.Function):
         (
             result_point,
             result_out_of_bounds,
-        ) = _backend._GEOMETRY_CUDA.trajectory_transform_point_2poses(
+        ) = _backend._GEOMETRY_HIP.trajectory_transform_point_2poses(
             trans0,
             rot0,
             time0,
@@ -816,7 +816,7 @@ class TrajectoryTransformPoint2PosesFunction(torch.autograd.Function):
             grad_time1,
             grad_point,
             grad_query_time,
-        ) = _backend._GEOMETRY_CUDA.trajectory_transform_point_2poses_bwd(
+        ) = _backend._GEOMETRY_HIP.trajectory_transform_point_2poses_bwd(
             trans0,
             rot0,
             time0,
@@ -863,7 +863,7 @@ class TrajectoryGetRotation2PosesFunction(torch.autograd.Function):
         (
             result_quat,
             result_out_of_bounds,
-        ) = _backend._GEOMETRY_CUDA.trajectory_get_rotation_2poses(
+        ) = _backend._GEOMETRY_HIP.trajectory_get_rotation_2poses(
             trans0,
             rot0,
             time0,
@@ -916,7 +916,7 @@ class TrajectoryGetRotation2PosesFunction(torch.autograd.Function):
             grad_rot1,
             grad_time1,
             grad_query_time,
-        ) = _backend._GEOMETRY_CUDA.trajectory_get_rotation_2poses_bwd(
+        ) = _backend._GEOMETRY_HIP.trajectory_get_rotation_2poses_bwd(
             trans0,
             rot0,
             time0,
@@ -957,7 +957,7 @@ class TrajectoryTransformPoint1PoseFunction(torch.autograd.Function):
         (
             result_point,
             result_out_of_bounds,
-        ) = _backend._GEOMETRY_CUDA.trajectory_transform_point_1pose(
+        ) = _backend._GEOMETRY_HIP.trajectory_transform_point_1pose(
             trans, rot, time, point, query_time
         )
         ctx.save_for_backward(
@@ -990,7 +990,7 @@ class TrajectoryTransformPoint1PoseFunction(torch.autograd.Function):
             grad_time,
             grad_point,
             grad_query_time,
-        ) = _backend._GEOMETRY_CUDA.trajectory_transform_point_1pose_bwd(
+        ) = _backend._GEOMETRY_HIP.trajectory_transform_point_1pose_bwd(
             trans,
             rot,
             time,
@@ -1023,7 +1023,7 @@ class SE3InterpolateTracksFunction(torch.autograd.Function):
         (
             out_translations,
             out_rotations,
-        ) = _backend._GEOMETRY_CUDA.se3_interpolate_tracks(
+        ) = _backend._GEOMETRY_HIP.se3_interpolate_tracks(
             pose_translations,
             pose_rotations,
             pose_times,
@@ -1073,7 +1073,7 @@ class SE3InterpolateTracksFunction(torch.autograd.Function):
             grad_pose_rotations,
             grad_pose_times,
             grad_query_times,
-        ) = _backend._GEOMETRY_CUDA.se3_interpolate_tracks_bwd(
+        ) = _backend._GEOMETRY_HIP.se3_interpolate_tracks_bwd(
             pose_translations,
             pose_rotations,
             pose_times,
@@ -1447,7 +1447,7 @@ def frame_transform_poses_tquat(
     tquat_poses = tquat_poses.contiguous()
     qx, qy, qz, qw = rotation
     tx, ty, tz = translation
-    return _backend._GEOMETRY_CUDA.frame_transform_poses_tquat(
+    return _backend._GEOMETRY_HIP.frame_transform_poses_tquat(
         tquat_poses,
         float(qx),
         float(qy),

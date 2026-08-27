@@ -63,7 +63,7 @@ IncludeCategories:
     Priority: 1
   - Regex: '^".*\.h"'
     Priority: 2
-  - Regex: '^".*\.cuh"'
+  - Regex: '^".*\.hip.h"'
     Priority: 3
   - Regex: '^".*'
     Priority: 4
@@ -71,7 +71,7 @@ IncludeCategories:
     Priority: 5
   - Regex: '^<.*\.h>'
     Priority: 6
-  - Regex: '^<.*\.cuh>'
+  - Regex: '^<.*\.hip.h>'
     Priority: 7
   - Regex: '^<.*'
     Priority: 8

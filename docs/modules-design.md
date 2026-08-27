@@ -55,8 +55,8 @@ gsplat/<name>/
       build.py
       ext.cpp
       csrc/
-        *.cu
-        *.cuh
+        *.hip
+        *.hip.h
   functional/
     __init__.py
     ...
@@ -118,7 +118,7 @@ It is responsible for:
 - defining `torch.autograd.Function` wrappers where needed,
 - owning Python-side backend dispatch,
 - defining backend-facing parameter packs and return structures,
-- containing native C++ and CUDA source code under `kernels/cuda/`.
+- containing native C++ and CUDA source code under `kernels/hip/`.
 
 Rules:
 
@@ -172,7 +172,7 @@ Rules:
 Libraries should follow this direction:
 
 ```text
-functional/  ->  kernels/  ->  kernels/cuda/
+functional/  ->  kernels/  ->  kernels/hip/
 models/      ->  functional/ and/or kernels/
 components/  ->  functional/ and/or kernels/ and optionally models/
 include/     ->  native code only
@@ -194,21 +194,21 @@ This keeps backend concerns from leaking into the public API surface.
 Libraries with native CUDA code should follow the same top-level extension
 structure:
 
-- `kernels/cuda/build.py`: JIT build and load logic
-- `kernels/cuda/ext.cpp`: C++ binding layer and PyBind exports
-- `kernels/cuda/csrc/*.cuh`: device-side helpers and per-row/per-element logic
-- `kernels/cuda/csrc/*.cu`: host launch code, `__global__` kernels, dispatch,
+- `kernels/hip/build.py`: JIT build and load logic
+- `kernels/hip/ext.cpp`: C++ binding layer and PyBind exports
+- `kernels/hip/csrc/*.hip.h`: device-side helpers and per-row/per-element logic
+- `kernels/hip/csrc/*.hip`: host launch code, `__global__` kernels, dispatch,
   and exported CUDA entrypoints
 
-### `.cuh` / `.cu` Pairing
+### `.hip.h` / `.hip` Pairing
 
-The preferred pattern is one sibling `.cuh` per top-level `.cu`.
+The preferred pattern is one sibling `.hip.h` per top-level `.hip`.
 
 Rules:
 
-- `*.cuh` contains `#pragma once`, device helpers, templates, and reusable
+- `*.hip.h` contains `#pragma once`, device helpers, templates, and reusable
   native implementation bodies.
-- `*.cu` contains `__global__` kernels, launch helpers, dispatch, and exported
+- `*.hip` contains `__global__` kernels, launch helpers, dispatch, and exported
   `*_cuda` / `*_bwd_cuda` entrypoints.
 - Shared native support headers that do not naturally belong to one translation
   unit may live under `include/`.
@@ -420,7 +420,7 @@ redefining the same base rules in conflicting ways.
   wrappers.
 - `components/` is optional and is reserved for stateful wrappers that should not
   inherit `torch.nn.Module`.
-- Native code organization should follow the `.cuh` + sibling `.cu` pattern.
+- Native code organization should follow the `.hip.h` + sibling `.hip` pattern.
 - Testing must validate gradient correctness against PyTorch references where
   that comparison is meaningful.
 - Directory structure should make public, backend, and shared-support code easy

@@ -3,7 +3,7 @@
 
 """Tests for the fused CUDA MCMC perturbation kernel.
 
-Verifies that the CUDA kernel in MCMCPerturbCUDA.cu produces results
+Verifies that the CUDA kernel in MCMCPerturbCUDA.hip produces results
 numerically consistent with the PyTorch reference implementation in
 gsplat/strategy/ops.py::inject_noise_to_position.
 

@@ -177,10 +177,10 @@ def test_sdist_excludes_tests_includes_cuda(tmp_path):
 
     # CUDA csrc sources from the sub-packages ARE included.
     required_substrings = [
-        "gsplat/scene/kernels/cuda/csrc/gaussian_scene_pack.cuh",
-        "gsplat/geometry/kernels/cuda/csrc/pose.cu",
-        "gsplat/sensors/kernels/cuda/csrc/camera_kernel.cu",
-        "gsplat/experimental/render/kernels/cuda/csrc/gaussian_inference/Projection.cu",
+        "gsplat/scene/kernels/hip/csrc/gaussian_scene_pack.hip.h",
+        "gsplat/geometry/kernels/hip/csrc/pose.hip",
+        "gsplat/sensors/kernels/hip/csrc/camera_kernel.hip",
+        "gsplat/experimental/render/kernels/hip/csrc/gaussian_inference/Projection.hip",
     ]
     for sub in required_substrings:
         assert any(n.endswith(sub) for n in names), f"sdist missing CUDA source: {sub}"

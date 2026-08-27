@@ -219,7 +219,7 @@ def windshield_distortion(sensor_device: torch.device):
     """Identity-equivalent windshield distortion at order 1.
 
     With ``eval_poly_2d`` order-1 layout ``c0 + c1*phi + c2*theta`` (see
-    ``external_distortion_kernel.cuh::eval_poly_2d``), the coefficients
+    ``external_distortion_kernel.hip.h::eval_poly_2d``), the coefficients
     ``h_poly = [0, 1, 0]`` and ``v_poly = [0, 0, 1]`` evaluate to
     ``adj_phi = phi`` and ``adj_theta = theta``. ``apply_bivariate_distortion``
     then computes ``sin(asin(ray_norm.{x,y})) = ray_norm.{x,y}``, which is an

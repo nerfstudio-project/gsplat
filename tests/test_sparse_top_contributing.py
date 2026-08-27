@@ -28,7 +28,7 @@ from tests.sparse_test_helpers import gather, grid, make_scene, subset_pixels
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(),
-    reason="rasterize_top_contributing_gaussian_ids_sparse is CUDA-only",
+    reason="rasterize_top_contributing_gaussian_ids_sparse is HIP-only",
 )
 
 

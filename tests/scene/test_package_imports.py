@@ -31,7 +31,7 @@ import gsplat.scene
 unexpected = {
     "gsplat.scene.functional",
     "gsplat.scene.kernels._backend",
-    "gsplat_scene_cuda",
+    "gsplat_scene_hip",
 }
 loaded = sorted(name for name in unexpected if name in sys.modules)
 if loaded:
@@ -53,7 +53,7 @@ import gsplat.scene.functional
 
 unexpected = {
     "gsplat.scene.kernels._backend",
-    "gsplat_scene_cuda",
+    "gsplat_scene_hip",
 }
 loaded = sorted(name for name in unexpected if name in sys.modules)
 if loaded:
@@ -67,7 +67,7 @@ def _repo_root() -> Path:
     return SCENE_ROOT.parent.parent
 
 
-def test_root_setup_ships_scene_cuda_sources():
+def test_root_setup_ships_SCENE_HIP_sources():
     """The scene CUDA/JIT sources ship with the main ``gsplat`` package.
 
     Packaging is driven by the root ``setup.py``
@@ -81,7 +81,7 @@ def test_root_setup_ships_scene_cuda_sources():
     required_sources = [
         "ext.cpp",
         "csrc/gaussian_scene_pack.cpp",
-        "csrc/gaussian_scene_pack.cuh",
+        "csrc/gaussian_scene_pack.hip.h",
     ]
     for source in required_sources:
         assert (scene_cuda / source).is_file(), f"missing scene CUDA source: {source}"
@@ -94,7 +94,7 @@ def test_root_setup_ships_scene_cuda_sources():
     assert (
         '"gsplat.scene"' in setup_text
     ), "setup.py is missing gsplat.scene package_data"
-    assert "kernels/cuda/csrc/*" in setup_text, "setup.py is missing scene csrc glob"
+    assert "kernels/hip/csrc/*" in setup_text, "setup.py is missing scene csrc glob"
     assert (
-        "gsplat/scene/kernels/cuda" in manifest_text
+        "gsplat/scene/kernels/hip" in manifest_text
     ), "MANIFEST.in is missing scene CUDA sources"

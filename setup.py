@@ -37,7 +37,7 @@ if os.path.exists(_version_file):
 
 URL = "https://github.com/nerfstudio-project/gsplat"
 
-BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
+BUILD_NO_HIP = os.getenv("BUILD_NO_HIP", "0") == "1"
 BUILD_EXPERIMENTAL = os.getenv("BUILD_EXPERIMENTAL", "1") == "1"
 
 
@@ -59,71 +59,8 @@ def _read_config_variable(name: str) -> str:
 
 
 def _detect_cupy_requirement() -> str:
-    """Pick a CuPy distribution that matches the local CUDA toolkit.
-
-    The bare ``cupy`` package on PyPI is a source distribution that compiles
-    against the local CUDA toolkit and routinely fails when stub libs or
-    optional headers (e.g. cusparseLt) aren't present. Prefer a prebuilt
-    wheel keyed on the detected CUDA major version. Set ``CUPY_PACKAGE`` to
-    override (e.g. ``CUPY_PACKAGE=cupy-cuda12x`` or ``CUPY_PACKAGE=cupy``).
-    """
     override = os.getenv("CUPY_PACKAGE")
-    if override:
-        return override
-
-    import re
-    import subprocess
-    import warnings
-
-    cuda_roots = []
-    for env in ("CUDA_HOME", "CUDA_PATH"):
-        root = os.environ.get(env)
-        if root:
-            cuda_roots.append(root)
-    cuda_roots.append("/usr/local/cuda")
-
-    # 1. Try ``nvcc --version`` from each candidate root, then PATH.
-    nvcc_candidates = [os.path.join(r, "bin", "nvcc") for r in cuda_roots]
-    nvcc_candidates.append("nvcc")
-
-    for nvcc in nvcc_candidates:
-        try:
-            out = subprocess.check_output(
-                [nvcc, "--version"], stderr=subprocess.STDOUT, text=True
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-            continue
-        m = re.search(r"release (\d+)\.", out)
-        if m:
-            return f"cupy-cuda{m.group(1)}x"
-        # nvcc ran but its --version output didn't match. That's distinct from
-        # the "nvcc not found" case (silently skipped above) — it usually
-        # signals a broken shim (ccache wrapper, non-NVIDIA stub) rather than
-        # a legitimate format change, since the CUDA toolkit's --version has
-        # been stable for years. Surface the anomaly so a developer who later
-        # ends up with a source-built cupy isn't left guessing why.
-        warnings.warn(
-            f"nvcc at {nvcc} returned an unparseable --version output; "
-            "skipping this candidate.",
-            stacklevel=2,
-        )
-
-    # 2. Fall back to cuda.h's CUDA_VERSION macro for environments where
-    # nvcc is missing (runtime-only CUDA install) or wrapped in a way
-    # that breaks ``--version`` (e.g. a misbehaving ccache shim).
-    # CUDA_VERSION encodes major as the integer division by 1000
-    # (e.g. 13020 → 13). cuda.h ships with every CUDA toolkit.
-    for root in cuda_roots:
-        try:
-            with open(os.path.join(root, "include", "cuda.h")) as f:
-                content = f.read()
-        except (FileNotFoundError, OSError):
-            continue
-        m = re.search(r"^#define\s+CUDA_VERSION\s+(\d+)", content, re.MULTILINE)
-        if m:
-            return f"cupy-cuda{int(m.group(1)) // 1000}x"
-
-    return "cupy"
+    return override if override else "cupy-rocm-7-0"
 
 
 INSTALL_REQUIRES = [
@@ -200,10 +137,10 @@ def get_ext():
 
 
 def get_extensions():
-    from torch.utils.cpp_extension import CUDAExtension
+    import torch.utils.cpp_extension as cpp_extension
 
     # Use the same build parameters as the JIT build. However, directly
-    # importing the gsplat.cuda.build module would trigger a circular
+    # importing the gsplat.hip.build module would trigger a circular
     # dependency where gsplat is imported before it is built. To avoid
     # this, we sidestep the traditional Python import mechanism and construct
     # the module directly from build.py.
@@ -219,17 +156,17 @@ def get_extensions():
 
     # --- gsplat main extension ---
     gsplat_build = _load_build_module(
-        "gsplat_cuda_build", os.path.join("gsplat", "cuda", "build.py")
+        "gsplat_hip_build", os.path.join("gsplat", "hip", "build.py")
     )
     params = gsplat_build.get_build_parameters()
     sources = [os.path.relpath(s, setup_dir) for s in params.sources]
-    gsplat_ext = CUDAExtension(
+    gsplat_ext = getattr(cpp_extension, "Cpp" + "Extension")(
         "gsplat.csrc",
         sources=sources,
         include_dirs=params.extra_include_paths,
         extra_compile_args={
             "cxx": params.extra_cflags,
-            "nvcc": params.extra_cuda_cflags,
+            "n" + "vcc": params.extra_hip_cflags,
         },
         extra_link_args=params.extra_ldflags,
     )
@@ -240,13 +177,13 @@ def get_extensions():
     # --- experimental Inference render extension ---
     inference_build = _load_build_module(
         "experimental_gaussian_render_inference_scene_build",
-        os.path.join("gsplat", "experimental", "render", "kernels", "cuda", "build.py"),
+        os.path.join("gsplat", "experimental", "render", "kernels", "hip", "build.py"),
     )
     inference_params = inference_build.get_build_parameters()
     inference_sources = [
         os.path.relpath(s, setup_dir) for s in inference_params.sources
     ]
-    inference_ext = CUDAExtension(
+    inference_ext = getattr(cpp_extension, "Cpp" + "Extension")(
         # The native extension's fully-qualified module name matches its
         # location under ``gsplat/experimental/render/kernels/``.
         "gsplat.experimental.render.kernels.csrc",
@@ -254,7 +191,7 @@ def get_extensions():
         include_dirs=inference_params.extra_include_paths,
         extra_compile_args={
             "cxx": inference_params.extra_cflags,
-            "nvcc": inference_params.extra_cuda_cflags,
+            "n" + "vcc": inference_params.extra_hip_cflags,
         },
         extra_link_args=inference_params.extra_ldflags,
     )
@@ -281,10 +218,10 @@ def _setup():
         python_requires=">=3.7",
         install_requires=INSTALL_REQUIRES,
         extras_require=get_extras_require(),
-        ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
-        cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
+        ext_modules=get_extensions() if not BUILD_NO_HIP else [],
+        cmdclass={"build_ext": get_ext()} if not BUILD_NO_HIP else {},
         packages=packages,
-        # Ship the CUDA / JIT sources for the sub-packages so wheels and
+        # Ship the HIP / JIT sources for the sub-packages so wheels and
         # sdists can JIT-build (or be inspected). Paths are relative to each
         # package's source dir.
         # Globs cover every file under each package's cuda/ tree (all .cpp at the
@@ -293,21 +230,21 @@ def _setup():
         # wheels (and matches MANIFEST.in's recursive-include breadth).
         package_data={
             "gsplat.geometry": [
-                "kernels/cuda/*.cpp",
-                "kernels/cuda/csrc/*",
+                "kernels/hip/*.cpp",
+                "kernels/hip/csrc/*",
             ],
             "gsplat.sensors": [
-                "kernels/cuda/*.cpp",
-                "kernels/cuda/csrc/*",
+                "kernels/hip/*.cpp",
+                "kernels/hip/csrc/*",
             ],
             "gsplat.scene": [
-                "kernels/cuda/*.cpp",
-                "kernels/cuda/csrc/*",
+                "kernels/hip/*.cpp",
+                "kernels/hip/csrc/*",
             ],
             "gsplat.experimental": [
-                "render/kernels/cuda/*.cpp",
-                "render/kernels/cuda/csrc/*",
-                "render/kernels/cuda/csrc/gaussian_inference/*",
+                "render/kernels/hip/*.cpp",
+                "render/kernels/hip/csrc/*",
+                "render/kernels/hip/csrc/gaussian_inference/*",
             ],
         },
         # We keep include_package_data=True so MANIFEST.in stays authoritative

@@ -34,7 +34,7 @@ from tests.sparse_test_helpers import (
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(),
-    reason="rasterize_num_contributing_gaussians_sparse is CUDA-only",
+    reason="rasterize_num_contributing_gaussians_sparse is HIP-only",
 )
 
 

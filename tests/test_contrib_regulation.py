@@ -28,7 +28,7 @@ def test_plane_smoothness_constant_input_is_zero():
 
 
 def test_plane_smoothness_linear_input_is_zero():
-    """Linear ramp along H → constant first-difference → zero second-difference."""
+    """Linear ramp along H â†’ constant first-difference â†’ zero second-difference."""
     h, w = 8, 8
     plane = torch.arange(h, dtype=torch.float32).view(1, 1, h, 1).expand(1, 4, h, w)
     out = plane_smoothness([plane])
@@ -36,7 +36,7 @@ def test_plane_smoothness_linear_input_is_zero():
 
 
 def test_plane_smoothness_curved_input_positive():
-    """Quadratic ramp along H → constant non-zero second-difference → positive."""
+    """Quadratic ramp along H â†’ constant non-zero second-difference â†’ positive."""
     h, w = 8, 8
     coords = torch.arange(h, dtype=torch.float32)
     plane = (coords**2).view(1, 1, h, 1).expand(1, 4, h, w).contiguous()
@@ -45,7 +45,7 @@ def test_plane_smoothness_curved_input_positive():
 
 
 def test_plane_smoothness_sums_across_planes():
-    plane_a = torch.full((1, 1, 4, 4), 0.5)  # constant → 0 contribution
+    plane_a = torch.full((1, 1, 4, 4), 0.5)  # constant â†’ 0 contribution
     plane_b = (torch.arange(4 * 4, dtype=torch.float32) ** 2).view(
         1, 1, 4, 4
     )  # nonzero
@@ -74,7 +74,7 @@ def test_smoothness_on_too_short_axis_skips_plane():
 
 
 # ---------------------------------------------------------------------------
-# time_l1 — penalises deviation from 1.0
+# time_l1 â€” penalises deviation from 1.0
 # ---------------------------------------------------------------------------
 
 
@@ -85,7 +85,7 @@ def test_time_l1_at_one_is_zero():
 
 
 def test_time_l1_constant_offset_matches_offset():
-    """Plane at constant 0.7 → mean |1 - 0.7| = 0.3 per plane."""
+    """Plane at constant 0.7 â†’ mean |1 - 0.7| = 0.3 per plane."""
     plane = torch.full((1, 1, 4, 4), 0.7)
     out = time_l1([plane])
     assert torch.allclose(out, torch.tensor(0.3), atol=1e-6)

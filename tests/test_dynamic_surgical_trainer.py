@@ -6,8 +6,8 @@ Three test groups:
 - Config validation — CPU.
 - Setup helpers (``build_splats_from_parser``, ``build_deform_modules``) —
   CPU, on a tiny synthetic EndoNeRF fixture.
-- End-to-end one-step training — **CUDA-only** because
-  :func:`gsplat.rasterization` is CUDA-only. The end-to-end test also
+- End-to-end one-step training — **HIP-only** because
+  :func:`gsplat.rasterization` is HIP-only. The end-to-end test also
   requires a real-data EndoNeRF directory (the synthetic 32×32 fixture
   produces sub-pixel Gaussian scales after unprojection + kNN); point at
   one via ``ENDONERF_DATA_DIR`` (typically a ``pulling/`` directory).

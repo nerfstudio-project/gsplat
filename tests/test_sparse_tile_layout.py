@@ -14,8 +14,8 @@
 # limitations under the License.
 """Unit tests for the sparse tile-layout op.
 
-Compares the CUDA ``gsplat.cuda._wrapper.build_sparse_tile_layout`` against the
-pure-torch reference ``gsplat.cuda._torch_impl._build_sparse_tile_layout``.
+Compares the CUDA ``gsplat.hip._wrapper.build_sparse_tile_layout`` against the
+pure-torch reference ``gsplat.hip._torch_impl._build_sparse_tile_layout``.
 """
 
 import math
@@ -26,7 +26,7 @@ import torch
 device = torch.device("cuda:0")
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="build_sparse_tile_layout is CUDA-only"
+    not torch.cuda.is_available(), reason="build_sparse_tile_layout is HIP-only"
 )
 
 
@@ -52,8 +52,8 @@ def _make_pixels(per_image_counts, width, height, seed):
 
 
 def _check_layout(pixels, image_ids, n_images, ts, tw, th):
-    from gsplat.cuda._torch_impl import _build_sparse_tile_layout
-    from gsplat.cuda._wrapper import build_sparse_tile_layout
+    from gsplat.hip._torch_impl import _build_sparse_tile_layout
+    from gsplat.hip._wrapper import build_sparse_tile_layout
 
     g_at, g_mask, g_bm, g_cs, g_pm = build_sparse_tile_layout(
         pixels, image_ids, n_images, ts, tw, th
@@ -143,7 +143,7 @@ def test_layout_trailing_empty_image():
 
 
 def test_layout_empty():
-    from gsplat.cuda._wrapper import build_sparse_tile_layout
+    from gsplat.hip._wrapper import build_sparse_tile_layout
 
     ts, tw, th = 16, 4, 3
     pixels = torch.empty(0, 2, dtype=torch.int32, device=device)
@@ -158,7 +158,7 @@ def test_layout_empty():
 
 
 def test_layout_deterministic():
-    from gsplat.cuda._wrapper import build_sparse_tile_layout
+    from gsplat.hip._wrapper import build_sparse_tile_layout
 
     W, H = 64, 48
     th, tw = _grid(W, H, 16)

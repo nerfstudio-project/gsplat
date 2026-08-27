@@ -39,8 +39,8 @@ cpp_extensions=(
     '*.hh'
     '*.hpp'
     '*.hxx'
-    '*.cu'
-    '*.cuh'
+    '*.hip'
+    '*.hip.h'
 )
 
 read_config_value() {

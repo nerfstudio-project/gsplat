@@ -18,8 +18,8 @@
 Environment variables:
 
 - ``GSPLAT_SENSORS_FORCE_JIT``: When set to ``"1"``, skip the prebuilt
-  ``gsplat_sensors_cuda`` wheel import and fall straight through to the JIT
-  build path in :mod:`.cuda.build`. Useful when iterating on the native
+  ``gsplat_sensors_hip`` wheel import and fall straight through to the JIT
+  build path in :mod:`.hip.build`. Useful when iterating on the native
   sources locally so every interpreter restart picks up edits without
   uninstalling/reinstalling the wheel.
 """
@@ -30,18 +30,18 @@ from gsplat._lazy_backend import make_lazy_backend
 
 
 def _build():
-    # Deferred so importing this module does not import .cuda.build.
-    from .cuda.build import build_and_load_sensors_cuda
+    # Deferred so importing this module does not import .hip.build.
+    from .hip.build import build_and_load_sensors_hip
 
-    return build_and_load_sensors_cuda()
+    return build_and_load_sensors_hip()
 
 
 _get_backend, __getattr__ = make_lazy_backend(
     module_name=__name__,
-    public_name="_SENSORS_CUDA",
-    prebuilt_module="gsplat_sensors_cuda",
+    public_name="_SENSORS_HIP",
+    prebuilt_module="gsplat_sensors_hip",
     jit_loader=_build,
-    force_jit_env="GSPLAT_SENSORS_FORCE_JIT",
+    FORCE_JIT_env="GSPLAT_SENSORS_FORCE_JIT",
 )
 
-__all__ = ["_SENSORS_CUDA"]
+__all__ = ["_SENSORS_HIP"]

@@ -204,7 +204,7 @@ def pack_gaussian_inference_scene(
     # --- dispatch --------------------------------------------------------
     from . import _backend
 
-    return _backend._SCENE_CUDA.pack_gaussian_inference_scene(
+    return _backend._SCENE_HIP.pack_gaussian_inference_scene(
         means,
         quats,
         scales,

@@ -78,8 +78,8 @@ def test_data():
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
-    from gsplat.cuda._torch_impl_2dgs import _fully_fused_projection_2dgs
-    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+    from gsplat.hip._torch_impl_2dgs import _fully_fused_projection_2dgs
+    from gsplat.hip._wrapper import fully_fused_projection_2dgs
 
     torch.manual_seed(42)
 
@@ -179,7 +179,7 @@ def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
 def test_fully_fused_projection_packed_2dgs(
     test_data, sparse_grad: bool, batch_dims: Tuple[int, ...]
 ):
-    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+    from gsplat.hip._wrapper import fully_fused_projection_2dgs
 
     torch.manual_seed(42)
 
@@ -325,8 +325,8 @@ def test_fully_fused_projection_packed_2dgs(
 def test_rasterize_to_pixels_2dgs(
     test_data, channels: int, batch_dims: Tuple[int, ...]
 ):
-    from gsplat.cuda._torch_impl_2dgs import _rasterize_to_pixels_2dgs
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._torch_impl_2dgs import _rasterize_to_pixels_2dgs
+    from gsplat.hip._wrapper import (
         fully_fused_projection_2dgs,
         isect_offset_encode,
         isect_tiles,
@@ -649,7 +649,7 @@ def test_rasterize_to_pixels_2dgs_densify_gradient():
     # v_ray_transforms instead yields a last-writer-wins partial sum that
     # undercounts whenever a gaussian spans multiple tiles, so the identity
     # holds only for the race-free accumulation.
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         fully_fused_projection_2dgs,
         isect_offset_encode,
         isect_tiles,
@@ -740,7 +740,7 @@ def test_fully_fused_projection_packed_2dgs_empty():
     # empty-input guard; with N==0 that divisor is zero (host-side integer
     # division by zero). An empty gaussian set must be a clean no-op returning
     # empty packed tensors.
-    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+    from gsplat.hip._wrapper import fully_fused_projection_2dgs
 
     W, H = 64, 64
     means = torch.zeros(0, 3, device=device)

@@ -18,9 +18,9 @@ import warnings
 
 from .color_correct import color_correct_affine, color_correct_quadratic
 from .compression import PngCompression
-from .cuda._torch_impl import accumulate
-from .cuda._torch_impl_2dgs import accumulate_2dgs
-from .cuda._wrapper import (
+from .hip._torch_impl import accumulate
+from .hip._torch_impl_2dgs import accumulate_2dgs
+from .hip._wrapper import (
     CameraModel,
     ExternalDistortionModelMeta,
     ExternalDistortionModelParameters,
@@ -48,6 +48,8 @@ from .cuda._wrapper import (
     rasterize_to_pixels_eval3d,
     rasterize_to_pixels_sparse,
     spherical_harmonics,
+    spherical_harmonics_l0,
+    spherical_harmonics_l1_plus,
     world_to_cam,
     has_2dgs,
     has_3dgs,
@@ -94,7 +96,7 @@ from .losses import (
 from .losses_fused import FusedGaussianLosses
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
-from .cuda._lidar import (
+from .hip._lidar import (
     compute_angles_to_columns_map as compute_lidar_angles_to_columns_map,
     LidarTiling,
     SpinningDirection,
@@ -120,6 +122,8 @@ __all__ = [
     "rasterization_2dgs",
     "rasterization_inria_wrapper",
     "spherical_harmonics",
+    "spherical_harmonics_l0",
+    "spherical_harmonics_l1_plus",
     "isect_offset_encode",
     "isect_tiles",
     "isect_tiles_lidar",

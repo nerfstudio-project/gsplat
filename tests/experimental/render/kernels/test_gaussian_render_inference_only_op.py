@@ -100,7 +100,7 @@ _PARITY_CASES = [
 def test_forward_parity(sh_degree, sh_compression):
     """Python-packed scene and C++-packed scene render bit-exact via gaussian_render_inference_only."""
     from gsplat.experimental.render.kernels._backend import _C  # noqa: F401
-    from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
+    from gsplat.scene.kernels._backend import _SCENE_HIP  # noqa: F401
 
     width, height = 256, 256
     means, quats, scales, opacities, colors = _make_gaussians(
@@ -136,8 +136,8 @@ def test_forward_parity(sh_degree, sh_compression):
             None,  # background
         )
 
-    # C++-packed path (via gsplat_scene_cuda.pack_gaussian_inference_scene)
-    mp_cpp, inference_cpp, cp_cpp = _SCENE_CUDA.pack_gaussian_inference_scene(
+    # C++-packed path (via gsplat_scene_hip.pack_gaussian_inference_scene)
+    mp_cpp, inference_cpp, cp_cpp = _SCENE_HIP.pack_gaussian_inference_scene(
         means, quats, scales, opacities, colors, sh_deg, sh_compression_mode
     )
 
@@ -335,7 +335,7 @@ def test_op_smoke():
     # No backward kernel exists, so grad_fn should be None
     assert (
         renders_g.grad_fn is None
-    ), "renders has grad_fn — AutogradCUDA should not be registered"
+    ), "renders has grad_fn â€” AutogradCUDA should not be registered"
     assert (
         alphas_g.grad_fn is None
-    ), "alphas has grad_fn — AutogradCUDA should not be registered"
+    ), "alphas has grad_fn â€” AutogradCUDA should not be registered"

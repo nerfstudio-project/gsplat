@@ -27,7 +27,7 @@ class ShutterType(IntEnum):
     """OpenCV pinhole shutter modes.
 
     Mirrors ``gsplat_sensors::ShutterType`` declared in
-    ``gsplat/sensors/kernels/cuda/csrc/shutter_type.h``. The C++ definition is
+    ``gsplat/sensors/kernels/hip/csrc/shutter_type.h``. The C++ definition is
     the source of truth; this class is verified against it at import time
     by :func:`_verify_shutter_type_matches_cpp`.
     """
@@ -40,12 +40,12 @@ class ShutterType(IntEnum):
 
 
 def _verify_shutter_type_matches_cpp() -> None:
-    cpp_enum = getattr(_backend._SENSORS_CUDA, "ShutterType", None)
+    cpp_enum = getattr(_backend._SENSORS_HIP, "ShutterType", None)
     if cpp_enum is None:
         raise RuntimeError(
-            "Loaded gsplat_sensors_cuda extension does not expose ShutterType. "
+            "Loaded gsplat_sensors_hip extension does not expose ShutterType. "
             "Rebuild the native extension (see "
-            "gsplat/sensors/kernels/cuda/ext.cpp)."
+            "gsplat/sensors/kernels/hip/ext.cpp)."
         )
     for member in ShutterType:
         cpp_member = getattr(cpp_enum, member.name, None)
@@ -53,7 +53,7 @@ def _verify_shutter_type_matches_cpp() -> None:
             raise RuntimeError(
                 f"C++ ShutterType is missing member {member.name!r}; "
                 "Python ShutterType in gsplat/sensors/kernels/cameras/types.py "
-                "and C++ in gsplat/sensors/kernels/cuda/csrc/shutter_type.h are "
+                "and C++ in gsplat/sensors/kernels/hip/csrc/shutter_type.h are "
                 "out of sync."
             )
         if int(cpp_member) != member.value:
@@ -61,7 +61,7 @@ def _verify_shutter_type_matches_cpp() -> None:
                 f"ShutterType.{member.name} mismatch: "
                 f"Python={member.value}, C++={int(cpp_member)}. "
                 "Update one side to match the other (C++ source of truth: "
-                "gsplat/sensors/kernels/cuda/csrc/shutter_type.h)."
+                "gsplat/sensors/kernels/hip/csrc/shutter_type.h)."
             )
 
 
@@ -93,7 +93,7 @@ OpenCVPinholeProjection = torch.classes.gsplat_sensors.OpenCVPinholeProjection
 Standard pinhole camera model with radial, tangential, and thin prism
 distortion. Parameters are stored as separate per-component tensors on the
 C++ ``OpenCVPinholeProjection`` struct (see
-``gsplat/sensors/kernels/cuda/csrc/camera_torch.h``).
+``gsplat/sensors/kernels/hip/csrc/camera_torch.h``).
 
 Attributes:
     focal_length: (2,) ``[fx, fy]`` focal lengths in pixels.
@@ -114,7 +114,7 @@ FThetaProjection = torch.classes.gsplat_sensors.FThetaProjection
 Polynomial fisheye model with a forward (ray-to-angle) and backward
 (angle-to-ray) polynomial pair and a 2x2 affine pixel transform. Parameters
 are stored as separate per-component tensors on the C++ ``FThetaProjection``
-struct (see ``gsplat/sensors/kernels/cuda/csrc/camera_torch.h``).
+struct (see ``gsplat/sensors/kernels/hip/csrc/camera_torch.h``).
 
 Attributes:
     principal_point: (2,) ``[cx, cy]`` principal point in pixels.
@@ -153,7 +153,7 @@ OpenCVFisheyeProjection = torch.classes.gsplat_sensors.OpenCVFisheyeProjection
 Equidistant fisheye model with an odd-power forward polynomial and an
 anisotropic focal length. Parameters are stored as separate per-component
 tensors on the C++ ``OpenCVFisheyeProjection`` struct (see
-``gsplat/sensors/kernels/cuda/csrc/camera_torch.h``).
+``gsplat/sensors/kernels/hip/csrc/camera_torch.h``).
 
 Attributes:
     principal_point: (2,) ``[cx, cy]`` principal point in pixels.

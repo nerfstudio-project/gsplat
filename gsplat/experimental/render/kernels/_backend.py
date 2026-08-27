@@ -15,7 +15,7 @@
 
 import torch
 
-from gsplat._lazy_backend import cuda_toolkit_available
+from gsplat._lazy_backend import hip_toolkit_available
 
 try:
     from rich.console import Console
@@ -50,7 +50,7 @@ def _get_backend():
     """Load and cache the native Inference CUDA extension on first use.
 
     Returns the loaded extension module, or ``None`` if it is unavailable
-    (no CUDA toolkit, build failure, or the op did not register).
+    (no ROCm/HIP toolkit, build failure, or the op did not register).
     """
     global _BACKEND
     if _BACKEND is not _UNSET:
@@ -58,7 +58,7 @@ def _get_backend():
 
     _C = None
     try:
-        # Try to import the compiled module first, matching gsplat.cuda._backend.
+        # Try to import the compiled module first, matching gsplat.hip._backend.
         # The module intentionally lives outside cuda.csrc so in-tree source
         # checkouts fall through to JIT instead of importing the source
         # directory as a namespace package. The relative import resolves the
@@ -66,10 +66,10 @@ def _get_backend():
         from . import csrc as _C
     except ImportError:
         # Fall back to JIT compilation. Import the builder lazily so importing
-        # this module does not pull in .cuda.build / torch.utils.cpp_extension.
-        if cuda_toolkit_available():
+        # this module does not pull in .hip.build / torch.utils.cpp_extension.
+        if hip_toolkit_available():
             try:
-                from .cuda.build import (
+                from .hip.build import (
                     build_and_load_experimental_gaussian_render_inference_scene,
                 )
 
@@ -81,7 +81,7 @@ def _get_backend():
                 )
         else:
             _warn(
-                "experimental: No CUDA toolkit found. Inference render will be disabled."
+                "experimental: No ROCm/HIP toolkit found. Inference render will be disabled."
             )
 
     if _C is not None and not _inference_op_registered():

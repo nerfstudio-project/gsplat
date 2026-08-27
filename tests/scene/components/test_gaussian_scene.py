@@ -212,7 +212,7 @@ def test_gaussian_scene_from_state_dict_empty_splats_round_trip():
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="gsplat::relocation is CUDA-only"
+    not torch.cuda.is_available(), reason="gsplat::relocation is HIP-only"
 )
 def test_strategy_ops_keep_scene_aligned():
     """Every strategy op must drive the matching on_* hook so sidecars stay in sync."""

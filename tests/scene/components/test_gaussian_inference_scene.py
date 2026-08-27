@@ -148,14 +148,14 @@ def _pack_scene_python(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_pack_op_smoke():
-    """pack_gaussian_inference_scene op is callable via gsplat_scene_cuda and produces no grad_fn."""
-    from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
+    """pack_gaussian_inference_scene op is callable via gsplat_scene_hip and produces no grad_fn."""
+    from gsplat.scene.kernels._backend import _SCENE_HIP  # noqa: F401
 
-    assert callable(_SCENE_CUDA.pack_gaussian_inference_scene)
+    assert callable(_SCENE_HIP.pack_gaussian_inference_scene)
 
     # Verify CUDA dispatch by calling it
     means, quats, scales, opacities, colors = _make_gaussians(N=10)
-    mp, qso_packed, cp = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp, qso_packed, cp = _SCENE_HIP.pack_gaussian_inference_scene(
         means, quats, scales, opacities, colors, -1, 0
     )
     assert mp.shape == (3, 10)
@@ -164,7 +164,7 @@ def test_pack_op_smoke():
 
     # Verify no grad_fn on outputs (torch::NoGradGuard in C++)
     means_g = means.clone().requires_grad_(True)
-    mp_g, qso_packed_g, cp_g = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp_g, qso_packed_g, cp_g = _SCENE_HIP.pack_gaussian_inference_scene(
         means_g, quats, scales, opacities, colors, -1, 0
     )
     assert mp_g.grad_fn is None
@@ -190,7 +190,7 @@ _PARITY_PACK_CASES = [
 @pytest.mark.parametrize("sh_degree,sh_compression", _PARITY_PACK_CASES)
 def test_pack_op_parity_with_python(sh_degree, sh_compression):
     """C++ pack op must be bit-exact with Python packing (when values in fp16 range)."""
-    from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
+    from gsplat.scene.kernels._backend import _SCENE_HIP  # noqa: F401
 
     means, quats, scales, opacities, colors = _make_gaussians(
         N=200, sh_degree=sh_degree
@@ -204,7 +204,7 @@ def test_pack_op_parity_with_python(sh_degree, sh_compression):
     # C++ packing
     sh_deg = -1 if sh_degree is None else sh_degree
     sh_compression_mode = _sh_compression_mode(sh_compression)
-    mp_cpp, qso_packed_cpp, cp_cpp = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp_cpp, qso_packed_cpp, cp_cpp = _SCENE_HIP.pack_gaussian_inference_scene(
         means, quats, scales, opacities, colors, sh_deg, int(sh_compression_mode)
     )
 
@@ -305,11 +305,11 @@ def test_detach_with_grad_warns():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_pack_op_with_grad_no_grad_fn():
     """Direct pack op with grad-tracked input: no grad_fn on outputs."""
-    from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
+    from gsplat.scene.kernels._backend import _SCENE_HIP  # noqa: F401
 
     means, quats, scales, opacities, colors = _make_gaussians(N=20)
     means_g = means.clone().requires_grad_(True)
-    mp, qso_packed, cp = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp, qso_packed, cp = _SCENE_HIP.pack_gaussian_inference_scene(
         means_g, quats, scales, opacities, colors, -1, 0
     )
     assert mp.grad_fn is None
@@ -716,9 +716,9 @@ def test_put_duplicate_name():
     from gsplat.scene import GaussianInferenceScene
 
     means, quats, scales, opacities, colors = _make_gaussians(N=10)
-    from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
+    from gsplat.scene.kernels._backend import _SCENE_HIP  # noqa: F401
 
-    mp, qso_packed, cp = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp, qso_packed, cp = _SCENE_HIP.pack_gaussian_inference_scene(
         means, quats, scales, opacities, colors, -1, 0
     )
 
@@ -1060,7 +1060,7 @@ _RENDER_PARITY_CASES = [
 def test_render_parity_cpp_packed_vs_python_packed(sh_degree, sh_compression):
     """Pack with C++ op, render via gaussian_render_inference_only, compare with Python packing."""
     from gsplat.experimental.render.kernels._backend import _C  # noqa: F401
-    from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
+    from gsplat.scene.kernels._backend import _SCENE_HIP  # noqa: F401
 
     width, height = 256, 256
     means, quats, scales, opacities, colors = _make_gaussians(
@@ -1096,7 +1096,7 @@ def test_render_parity_cpp_packed_vs_python_packed(sh_degree, sh_compression):
         )
 
     # Pack with C++ op
-    mp, qso_packed, cp = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp, qso_packed, cp = _SCENE_HIP.pack_gaussian_inference_scene(
         means, quats, scales, opacities, colors, sh_deg, int(sh_compression_mode)
     )
 
@@ -1137,16 +1137,16 @@ def test_render_parity_cpp_packed_vs_python_packed(sh_degree, sh_compression):
 def test_multi_component_put_get():
     """Multiple components can be put and retrieved correctly."""
     from gsplat.scene import GaussianInferenceScene
-    from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
+    from gsplat.scene.kernels._backend import _SCENE_HIP  # noqa: F401
 
     N1, N2 = 30, 50
     means1, quats1, scales1, opacities1, colors1 = _make_gaussians(N=N1)
     means2, quats2, scales2, opacities2, colors2 = _make_gaussians(N=N2)
 
-    mp1, qso_packed1, cp1 = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp1, qso_packed1, cp1 = _SCENE_HIP.pack_gaussian_inference_scene(
         means1, quats1, scales1, opacities1, colors1, -1, 0
     )
-    mp2, qso_packed2, cp2 = _SCENE_CUDA.pack_gaussian_inference_scene(
+    mp2, qso_packed2, cp2 = _SCENE_HIP.pack_gaussian_inference_scene(
         means2, quats2, scales2, opacities2, colors2, -1, 0
     )
 

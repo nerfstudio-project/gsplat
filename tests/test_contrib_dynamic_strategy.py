@@ -108,7 +108,7 @@ def test_dynamic_strategy_post_backward_without_init_raises():
 # ---------------------------------------------------------------------------
 # Full one-step training pass — covered by the integration test once the
 # trainer (TDD step 9) lands. Skipped here because rasterization is
-# CUDA-only and the strategy on its own can't drive a forward pass.
+# HIP-only and the strategy on its own can't drive a forward pass.
 # ---------------------------------------------------------------------------
 
 

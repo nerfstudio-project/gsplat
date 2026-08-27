@@ -31,12 +31,12 @@ import pytest
 import torch
 
 import gsplat
-from gsplat.cuda._wrapper import (
+from gsplat.hip._wrapper import (
     BivariateWindshieldModelParameters,
     _make_lazy_cuda_func,
     ExternalDistortionReferencePolynomial,
 )
-from gsplat.cuda._torch_external_distortion import (  # PyTorch reference
+from gsplat.hip._torch_external_distortion import (  # PyTorch reference
     ref_compute_order,
     ref_eval_bivariate_poly,
     ref_distort_camera_ray,
@@ -301,7 +301,7 @@ class TestBivariatePolyEvaluationCUDA:
     def test_cubic_poly(self):
         """Order 3: f(x,y) = x^3 (cubic monomial)."""
         # Order 3 layout: block0 has 4 coeffs (inner_order=3, x^0..x^3)
-        # x^3 → coeffs[3] = 1.0, rest zero → f = x^3 * y^0 = x^3
+        # x^3 â†’ coeffs[3] = 1.0, rest zero â†’ f = x^3 * y^0 = x^3
         coeffs = [0.0] * num_coeffs_for_order(3)  # 10 coeffs
         coeffs[3] = 1.0  # x^3 in first block
         result = self._eval_cuda(coeffs, 3, [2.0, -1.0, 0.5], [0.0, 0.0, 0.0])
@@ -311,10 +311,10 @@ class TestBivariatePolyEvaluationCUDA:
 
     def test_cubic_mixed(self):
         """Order 3: f(x,y) = x^2*y."""
-        # block0 (inner_order=3): x^0..x^3 → outer_coeffs[0], multiplied by y^0
-        # block1 (inner_order=2): x^0..x^2 → outer_coeffs[1], multiplied by y^1
+        # block0 (inner_order=3): x^0..x^3 â†’ outer_coeffs[0], multiplied by y^0
+        # block1 (inner_order=2): x^0..x^2 â†’ outer_coeffs[1], multiplied by y^1
         # For x^2*y: need outer_coeffs[1] = x^2, so block1's x^2 coeff = 1.0
-        # block1 starts at index 4, x^2 is at offset 2 → coeffs[6] = 1.0
+        # block1 starts at index 4, x^2 is at offset 2 â†’ coeffs[6] = 1.0
         coeffs = [0.0] * num_coeffs_for_order(3)
         coeffs[6] = 1.0
         result = self._eval_cuda(coeffs, 3, [3.0], [2.0])
@@ -356,7 +356,7 @@ class TestBivariatePolyEvaluationCUDA:
         """Zero-padded CUDA evaluation should match exact-order Python reference.
 
         This validates that padding lower-order polynomials to MAX_ORDER=5 (21 coeffs)
-        doesn't degrade precision — the core invariant of the zero-padding approach.
+        doesn't degrade precision â€” the core invariant of the zero-padding approach.
         """
         torch.manual_seed(99)
         for order in range(6):
@@ -521,9 +521,9 @@ class TestDistortCameraRaysCUDA:
             ray, h_fwd, v_fwd, h_inv=h_inv, v_inv=v_inv, inverse=True
         )
 
-        # Forward: x = sin(0.1) ≈ 0.0998
+        # Forward: x = sin(0.1) â‰ˆ 0.0998
         assert result_fwd[0, 0].item() == pytest.approx(math.sin(0.1), abs=1e-5)
-        # Inverse: x = sin(-0.1) ≈ -0.0998
+        # Inverse: x = sin(-0.1) â‰ˆ -0.0998
         assert result_inv[0, 0].item() == pytest.approx(math.sin(-0.1), abs=1e-5)
 
     def test_cross_validate_against_python_reference(self):
@@ -639,7 +639,7 @@ class TestDistortCameraRaysCUDA:
         """Boundary rays where ray[i]/ray_length == 1.0 must not produce NaN.
 
         Under --use_fast_math, the ratio can exceed 1.0 by an ULP, making
-        asin return NaN.  The clamp in ExternalDistortion.cuh and the Python
+        asin return NaN.  The clamp in ExternalDistortion.hip.h and the Python
         ref prevents this.  Cross-validates CUDA against Python reference.
         """
         h = make_identity_horizontal_poly()
@@ -707,7 +707,7 @@ class TestDistortCameraRaysCUDA:
 
         # All boundary rays must produce finite output despite ratio > 1.0
         with unittest.mock.patch(
-            "gsplat.cuda._torch_external_distortion.math.sqrt", fast_math_sqrt
+            "gsplat.hip._torch_external_distortion.math.sqrt", fast_math_sqrt
         ):
             for ray in boundary_rays:
                 result = ref_distort_camera_ray(ray, h, v, 1, 1)
@@ -735,7 +735,7 @@ class TestCameraWithExternalDistortion:
 
     @staticmethod
     def _create_pinhole_camera(width=640, height=480, external_distortion_coeffs=None):
-        from gsplat.cuda._wrapper import create_camera_model
+        from gsplat.hip._wrapper import create_camera_model
 
         focal_lengths = torch.tensor(
             [[320.0, 320.0]], dtype=torch.float32, device="cuda"

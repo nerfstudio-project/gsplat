@@ -148,7 +148,87 @@ def torch_ssim_loss(
     return ssim_map
 
 
+def _separable_gaussian_blur(
+    img: Tensor, kernel_1d: Tensor, pad: int, channel: int
+) -> Tensor:
+    """Depthwise-separable Gaussian blur.
+
+    Mathematically identical (up to floating-point summation-order rounding)
+    to a full 2D grouped convolution with the outer-product window
+    ``kernel_1d @ kernel_1d.T``, but performs ``O(2 * window_size)``
+    multiply-adds per output element instead of ``O(window_size ** 2)`` --
+    exploiting the fact that the SSIM Gaussian window is separable by
+    construction (see :func:`create_ssim_window`).
+
+    This is not a micro-optimization: real-hardware profiling of
+    ``simple_trainer.py`` (ROCm/gfx1100, ``fused_ssim`` unavailable so the
+    ``torch_ssim_loss`` fallback below was in use) showed the single 2D
+    grouped-conv Gaussian blur (``miopenSp3AsmConv_v30_3_1_gfx11_fp32_f3x2_stride1``)
+    consuming ~49% of total per-step GPU time -- more than the rasterization
+    forward+backward kernels combined -- for an 11x11 window applied 5 times
+    per training step across all photometric moments.
+
+    Args:
+        img: Input batch, shape ``(B, channel, H, W)``.
+        kernel_1d: 1D Gaussian kernel, shape ``(channel, 1, 1, window_size)``.
+        pad: Padding (``window_size // 2``) applied on both spatial dims.
+        channel: Number of channels (must match *img* and *kernel_1d*).
+
+    Returns:
+        Blurred tensor, same shape as *img*.
+    """
+    blurred = F.conv2d(img, kernel_1d, padding=(0, pad), groups=channel)
+    blurred = F.conv2d(
+        blurred, kernel_1d.transpose(-1, -2), padding=(pad, 0), groups=channel
+    )
+    return blurred
+
+
+def _torch_ssim_loss_separable(
+    img1: Tensor,
+    img2: Tensor,
+    kernel_1d: Tensor,
+    window_size: int,
+    channel: int,
+) -> Tensor:
+    """Separable-convolution fast path used internally by :func:`ssim_loss`.
+
+    Produces the same SSIM map (Wang et al. 2004) as :func:`torch_ssim_loss`,
+    up to floating-point summation-order rounding, by replacing each of the
+    5 Gaussian-weighted-moment convolutions with
+    :func:`_separable_gaussian_blur`. :func:`torch_ssim_loss` itself is left
+    completely unchanged -- it is part of the tested reference API and
+    accepts an arbitrary, not-necessarily-separable, precomputed 2D window --
+    so this fast path is only used here, where the window is always
+    separable by construction (:func:`create_ssim_window`).
+    """
+    pad = window_size // 2
+
+    def blur(x: Tensor) -> Tensor:
+        return _separable_gaussian_blur(x, kernel_1d, pad, channel)
+
+    mu1 = blur(img1)
+    mu2 = blur(img2)
+
+    mu1_sq = mu1.pow(2)
+    mu2_sq = mu2.pow(2)
+    mu1_mu2 = mu1 * mu2
+
+    sigma1_sq = blur(img1 * img1) - mu1_sq
+    sigma2_sq = blur(img2 * img2) - mu2_sq
+    sigma12 = blur(img1 * img2) - mu1_mu2
+
+    C1 = 0.01**2
+    C2 = 0.03**2
+
+    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
+        (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
+    )
+    return ssim_map
+
+
 _ssim_window_cache: dict = {}
+_ssim_kernel1d_cache: dict = {}
 
 
 def ssim_loss(
@@ -193,12 +273,19 @@ def ssim_loss(
 
     channel = img1.shape[1]
     key = (window_size, channel, img1.device, img1.dtype)
-    if key not in _ssim_window_cache:
-        _ssim_window_cache[key] = create_ssim_window(
-            window_size, channel, device=img1.device
-        ).type_as(img1)
-    window = _ssim_window_cache[key]
-    return 1.0 - torch_ssim_loss(img1, img2, window, window_size, channel).mean()
+    if key not in _ssim_kernel1d_cache:
+        g1d = _gaussian_kernel_1d(window_size, 1.5, device=img1.device)
+        _ssim_kernel1d_cache[key] = (
+            g1d.view(1, 1, 1, window_size)
+            .expand(channel, 1, 1, window_size)
+            .contiguous()
+            .type_as(img1)
+        )
+    kernel_1d = _ssim_kernel1d_cache[key]
+    return (
+        1.0
+        - _torch_ssim_loss_separable(img1, img2, kernel_1d, window_size, channel).mean()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +344,7 @@ def binocular_disparity_l1(
             f"gt_depth shape {gt_depth.shape}. Shapes must match."
         )
     # A pair (pred_i, gt_i) contributes only when *both* sides are valid.
-    # Otherwise the per-side `1/x ↔ 0` substitution leaks `|0 - 1/other|`
+    # Otherwise the per-side `1/x â†” 0` substitution leaks `|0 - 1/other|`
     # into the loss when only one side is invalid, which is not what the
     # docstring promises.
     valid_pred = pred_depth.abs() > eps
@@ -286,7 +373,7 @@ def pearson_depth_loss(
     Ported from G-SHARP v0.2 (monocular branch). Returns a differentiable 0
     when fewer than two valid samples remain after masking, and clamps the
     denominator to a tiny positive constant when either input has near-zero
-    variance — both situations would otherwise yield NaN.
+    variance â€” both situations would otherwise yield NaN.
 
     Args:
         pred_depth: Predicted depth, shape ``(..., H, W)``.
@@ -366,7 +453,7 @@ def masked_ssim(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
     then take an unmasked SSIM over the zeroed pair).
 
     Note that the mean is taken over the full image, so the loss magnitude
-    scales with mask coverage — sparse masks dilute the reported loss in
+    scales with mask coverage â€” sparse masks dilute the reported loss in
     proportion to the masked-out fraction. This bias is intentional and
     matches the upstream G-SHARP convention.
 
@@ -488,7 +575,7 @@ def lidar_distance_loss(
         gt_distance: Ground-truth measured distance per ray, same shape.
         valid_mask: Optional boolean mask for valid (non-dropped, non-invalid)
             rays.  When provided, only masked elements contribute to the loss.
-        loss_fn: Per-element loss function — a string name (``'l1'``,
+        loss_fn: Per-element loss function â€” a string name (``'l1'``,
             ``'mse'``, ``'huber'``, ``'smooth_l1'``) or a callable
             ``(pred, target) -> Tensor``.  Default ``'l1'``.
 
@@ -525,7 +612,7 @@ def lidar_intensity_loss(
         pred_intensity: Predicted intensity per ray, ``[..., 1]`` or ``[...]``.
         gt_intensity: Ground-truth intensity per ray, same shape.
         valid_mask: Optional boolean mask for valid rays.
-        loss_fn: Per-element loss function — a string name (``'l1'``,
+        loss_fn: Per-element loss function â€” a string name (``'l1'``,
             ``'mse'``, ``'huber'``) or a callable.  Default ``'l1'``.
 
     Returns:
@@ -564,7 +651,7 @@ def lidar_raydrop_loss(
         gt_raydrop: Ground-truth raydrop labels (0 or 1), same shape.
         valid_mask: Optional boolean mask for valid rays (excludes invalid rays
             but keeps dropped rays, since those are the positive class).
-        loss_fn: Per-element loss function — a string name
+        loss_fn: Per-element loss function â€” a string name
             (``'bce_with_logits'``, ``'mse'``, ``'l1'``) or a callable.
             Default ``'bce_with_logits'``.
 
@@ -602,7 +689,7 @@ def lidar_background_loss(
             logits-based losses (``'bce_with_logits'``) are not supported here.
         background_mask: Boolean mask where True = background/sky ray.
         valid_mask: Optional boolean mask for valid (non-invalid, non-dropped) rays.
-        loss_fn: Per-element loss function — a string name (``'bce'``,
+        loss_fn: Per-element loss function â€” a string name (``'bce'``,
             ``'bce_clipped'``, ``'mse'``, ``'l1'``) or a callable.  Default
             ``'bce'``. Note: ``'bce'`` can produce +inf at the 0/1 boundary
             even with the clamp; ``'bce_clipped'`` avoids this by clipping
@@ -992,7 +1079,7 @@ def reduce_mean(value: Tensor, mask: Tensor | None = None) -> Tensor:
 
     When *mask* is provided, it must be a bool or integer tensor (not
     floating point).  This ensures ``mask.sum().clamp(min=1)`` is a
-    correct denominator — fractional masks would require clamping to the
+    correct denominator â€” fractional masks would require clamping to the
     smallest representable float, which changes the semantics.  Callers
     with float masks should convert to bool first (e.g. ``mask > 0``).
 

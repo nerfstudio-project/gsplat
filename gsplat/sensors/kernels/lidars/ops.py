@@ -33,7 +33,7 @@ from torch import Tensor
 
 from .. import _backend
 
-_backend._SENSORS_CUDA  # noqa: B018  # ensures torch.ops gsplat_sensors registrations exist
+_backend._SENSORS_HIP  # noqa: B018  # ensures torch.ops gsplat_sensors registrations exist
 from ..common import (
     DynamicPose,
     raise_or_target_device,

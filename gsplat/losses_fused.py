@@ -20,7 +20,7 @@ from typing import Optional, Tuple
 import torch
 from torch import Tensor
 
-from gsplat.cuda._wrapper import has_losses
+from gsplat.hip._wrapper import has_losses
 from gsplat.losses import (
     gaussian_density_reg,
     gaussian_scale_reg,
@@ -81,7 +81,7 @@ class FusedGaussianLosses(torch.nn.Module):
         if visibility is not None:
             all_cuda = all_cuda and visibility.is_cuda
         if self._cuda_available and all_cuda:
-            from gsplat.cuda._losses_wrapper import _FusedGaussianLosses
+            from gsplat.hip._losses_wrapper import _FusedGaussianLosses
 
             return _FusedGaussianLosses.apply(
                 scales,

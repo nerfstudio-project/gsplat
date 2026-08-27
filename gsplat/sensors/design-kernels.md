@@ -6,7 +6,7 @@
 It owns the native CUDA sources for camera and spinning-LiDAR projection, the
 C++ `torch::class_<>` registrations for sensor parameter types, the Torch op
 bindings, the Python autograd wrappers that drive them, the dispatch tables,
-and the JIT build configuration for the `gsplat_sensors_cuda` extension.
+and the JIT build configuration for the `gsplat_sensors_hip` extension.
 
 It does not own the public stateless API (that is `gsplat/sensors/functional/`,
 see `design-functional.md`) or the `nn.Module` surface that wraps it (that is
@@ -25,8 +25,8 @@ gsplat.sensors.functional.<op>(...)
   -> torch.ops.gsplat_sensors.<op>_opencv_pinhole_<distortion>(_backward)?
   -> gsplat_sensors::<op>_...(...)                  # C++ entry in camera_torch.cpp
   -> <op>_<...>_launch(...)                         # bridge prototype in camera_params.h
-  -> <op>_<...>_kernel<<<...>>>(...)                # __global__ in camera_kernel.cu
-  -> device math in camera_kernel.cuh + math.cuh
+  -> <op>_<...>_kernel<<<...>>>(...)                # __global__ in camera_kernel.hip
+  -> device math in camera_kernel.hip.h + math.hip.h
 ```
 
 ## Scope
@@ -95,49 +95,49 @@ gsplat/sensors/kernels/
     ext.cpp                         # TORCH_LIBRARY + PYBIND11_MODULE
     csrc/
       camera_params.h               # bridge POD + per-pair _launch prototypes
-      camera_kernel.cuh             # CUDA-only device math + per-thread structs
-      camera_kernel.cu              # __global__ + _forward_launch definitions
-      camera_kernel_backward.cu     # __global__ + _backward_launch definitions
+      camera_kernel.hip.h             # HIP-only device math + per-thread structs
+      camera_kernel.hip              # __global__ + _forward_launch definitions
+      camera_kernel_backward.hip     # __global__ + _backward_launch definitions
       camera_torch.h                # Torch-only entry declarations
       camera_torch.cpp              # Torch-only entry definitions
       external_distortion_params.h  # bridge POD for distortion
-      external_distortion_kernel.cuh  # CUDA-only header-only distortion math
+      external_distortion_kernel.hip.h  # HIP-only header-only distortion math
       external_distortion_torch.h
       external_distortion_torch.cpp
-      ftheta_kernel.cuh
-      ftheta_kernel.cu
-      ftheta_kernel_backward.cu
+      ftheta_kernel.hip.h
+      ftheta_kernel.hip
+      ftheta_kernel_backward.hip
       lidar_params.h
-      lidar_kernel.cuh
-      lidar_kernel.cu
-      lidar_kernel_backward.cu
+      lidar_kernel.hip.h
+      lidar_kernel.hip
+      lidar_kernel_backward.hip
       lidar_torch.h
       lidar_torch.cpp
       shutter_type.h                # source of truth for shutter enum
-      math.cuh                      # float3 helpers + normalize3 bwd
+      math.hip.h                      # float3 helpers + normalize3 bwd
 ```
 
 There is no `include/projective_sensor.h` trait header — the kernel layer does
 not use a C++ traits contract.
 
-## Native split: bridge / CUDA-only / Torch-only
+## Native split: bridge / HIP-only / Torch-only
 
 The hardest rule of the kernel layer is that the CUDA half and the Torch half
 of every translation unit are kept strictly isolated; they meet only through a
-small set of bridge headers. This keeps `nvcc` compilation of the kernels
-independent of the ATen include graph and lets each `.cu` build without
+small set of bridge headers. This keeps `hipcc` compilation of the kernels
+independent of the ATen include graph and lets each `.hip` build without
 pulling Torch templates through the compiler.
 
 | File extension | Compiler | Allowed includes | Role |
 | --- | --- | --- | --- |
-| `*_params.h` | both | `<cstdint>`, sibling `*_params.h`, the forward-declared `cudaStream_t` | Bridge: POD structs + `_launch` prototypes. No CUDA, no Torch. |
-| `*_kernel.cuh` | nvcc | `*_params.h`, other `*_kernel.cuh`, `<cuda_runtime.h>`, `gsplat/geometry` headers (`quaternion.cuh`, `pose.cuh`, `coordinate_conversions.cuh`) | CUDA-only device math, per-thread structs, `__device__` helpers. |
-| `*_kernel.cu` / `*_kernel_backward.cu` | nvcc | matching `.cuh`, `<c10/cuda/CUDAException.h>` | `__global__` definitions, per-pair `_launch` definitions. |
+| `*_params.h` | both | `<cstdint>`, sibling `*_params.h`, the forward-declared `hipStream_t` | Bridge: POD structs + `_launch` prototypes. No CUDA, no Torch. |
+| `*_kernel.hip.h` | hipcc | `*_params.h`, other `*_kernel.hip.h`, `<hip/hip_runtime.h>`, `gsplat/geometry` headers (`quaternion.hip.h`, `pose.hip.h`, `coordinate_conversions.hip.h`) | HIP-only device math, per-thread structs, `__device__` helpers. |
+| `*_kernel.hip` / `*_kernel_backward.hip` | hipcc | matching `.hip.h`, `<c10/hip/HIPException.h>` | `__global__` definitions, per-pair `_launch` definitions. |
 | `*_torch.h` / `.cpp` | host C++ | `*_params.h`, ATen / `torch::CustomClassHolder` | Host structs, validators, Torch entry functions. |
 | `ext.cpp` | host C++ | all `*_torch.h` | `TORCH_LIBRARY` + `PYBIND11_MODULE`. |
 
 The bridge seam is exactly two declarations: an opaque `CUstream_st`
-forward-declaration aliased as `cudaStream_t` in `camera_params.h`, plus the
+forward-declaration aliased as `hipStream_t` in `camera_params.h`, plus the
 POD `KernelParameters` structs. Every other type leaks only on one side or
 the other.
 
@@ -149,14 +149,14 @@ value, and (for the projection / distortion types only) a per-thread register
 struct loaded inside the kernel. The names are not perfectly uniform; the
 table below states what each one is actually called.
 
-| Registered type | Torch host (`*_torch.h`/`.cpp`) | Bridge POD (`*_params.h`) | Per-thread (`*_kernel.cuh`) |
+| Registered type | Torch host (`*_torch.h`/`.cpp`) | Bridge POD (`*_params.h`) | Per-thread (`*_kernel.hip.h`) |
 | --- | --- | --- | --- |
 | OpenCV pinhole | `gsplat_sensors::OpenCVPinholeProjection` | `OpenCVPinholeProjection_KernelParameters` | `OpenCVPinholeParams` |
 | FTheta | `gsplat_sensors::FThetaProjection` | `FThetaProjection_KernelParameters` | `FThetaParams` |
 | OpenCV fisheye | `gsplat_sensors::OpenCVFisheyeProjection` | `OpenCVFisheyeProjection_KernelParameters` | `OpenCVFisheyeParams` |
 | No external distortion | `gsplat_sensors::NoExternalDistortion` | `NoExternalDistortion_KernelParameters` (empty) | `NoExternalDistortion_Parameters` (empty no-op tag) |
 | Bivariate windshield | `gsplat_sensors::BivariateWindshieldDistortion` | `BivariateWindshieldDistortion_KernelParameters` | `BivariateWindshieldParams` |
-| Row-offset spinning LiDAR | `gsplat_sensors::RowOffsetStructuredSpinningLidarProjection` | `RowOffsetStructuredSpinningLidarProjection_KernelParameters` | raw table/POD access in `lidar_kernel.cuh` |
+| Row-offset spinning LiDAR | `gsplat_sensors::RowOffsetStructuredSpinningLidarProjection` | `RowOffsetStructuredSpinningLidarProjection_KernelParameters` | raw table/POD access in `lidar_kernel.hip.h` |
 
 The naming asymmetry is intentional and worth flagging: projection per-thread
 structs drop the `Projection` suffix (`OpenCVPinholeParams`, `FThetaParams`,
@@ -290,7 +290,7 @@ by the functional layer for downstream tools that still want a `(N, 4, 4)`
 representation.
 
 Pose interpolation runs on device using geometry-owned SLERP helpers in
-`gsplat/geometry/kernels/cuda/csrc/quaternion.cuh`. Sensor backward kernels call the
+`gsplat/geometry/kernels/hip/csrc/quaternion.hip.h`. Sensor backward kernels call the
 `quat_slerp_pair_bwd_no_time_grad` variant because the per-frame interpolation
 time is a fixed (non-differentiable) timestamp; the `with_time_grad` variant,
 which also emits the time gradient, is used only by `gsplat/geometry`'s
@@ -300,7 +300,7 @@ trajectory backward path where query time is differentiable.
 
 | Path | Owns |
 | --- | --- |
-| `kernels/_backend.py` | Prebuilt `gsplat_sensors_cuda` import, `GSPLAT_SENSORS_FORCE_JIT=1` override, JIT fallback wiring. |
+| `kernels/_backend.py` | Prebuilt `gsplat_sensors_hip` import, `GSPLAT_SENSORS_FORCE_JIT=1` override, JIT fallback wiring. |
 | `kernels/projective_sensor_ops.py` | Seven `(projection, distortion)`-keyed dispatch dicts + the public `_DISPATCH_TABLES` registry and `_lookup` helper. |
 | `kernels/test_projective_sensor_ops.py` | Dispatch-table conformance + a smoke test that the `None`-distortion path raises and the bivariate path returns a valid point. |
 | `kernels/test_lidar_dispatch.py` | Single-key LiDAR dispatch conformance for all five LiDAR ops. |
@@ -314,50 +314,50 @@ trajectory backward path where query time is differentiable.
 | `kernels/lidars/test_ops.py` | LiDAR forward/backward tests against runtime oracles, analytic geometry checks, round-trip recovery, and fp64 gradcheck coverage. |
 | `kernels/common/pose.py` | `Pose`, `DynamicPose`, `Trajectory` dataclasses and `DynamicPose.from_static_pose` / `to_trajectory` helpers. |
 | `kernels/common/utils.py` | `wxyz_to_xyzw`, `xyzw_to_wxyz`, `poses_to_matrix`, `valid_flags_to_indices`. |
-| `kernels/cuda/build.py` | `get_build_parameters()` + `build_and_load_sensors_cuda()` JIT entry; `DEBUG` / `NVCC_FLAGS` / `VERBOSE` env handling; stale ninja lock cleanup. |
-| `kernels/cuda/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
-| `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter and Newton-iteration bounds. Forward-declared `cudaStream_t`. |
+| `kernels/hip/build.py` | `get_build_parameters()` + `build_and_load_sensors_hip()` JIT entry; `DEBUG` / `HIPCC_FLAGS` / `VERBOSE` env handling; stale ninja lock cleanup. |
+| `kernels/hip/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
+| `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter and Newton-iteration bounds. Forward-declared `hipStream_t`. |
 | `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters` (empty) + `BivariateWindshieldDistortion_KernelParameters`. |
-| `csrc/camera_kernel.cuh` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/cuda/csrc/quaternion.cuh`. |
-| `csrc/ftheta_kernel.cuh` / `.cu` / `_backward.cu` | FTheta device math, forward kernels, and backward kernels. |
-| `csrc/fisheye_kernel.cuh` / `.cu` / `_backward.cu` | OpenCV fisheye device math, forward kernels, and backward kernels. |
-| `csrc/external_distortion_kernel.cuh` | `BivariateWindshieldParams` + `NoExternalDistortion_Parameters` no-op tag + header-only bivariate distortion math (no companion `.cu`). |
-| `csrc/math.cuh` | `safe_nonzero`, `add3 / sub3 / scale3 / dot3`, `normalize3` forward and backward. |
-| `gsplat/geometry/.../coordinate_conversions.cuh` | Geometry-owned header-only `sincos_t` and `spherical_to_cartesian` / `cartesian_to_spherical` ray<->angle conversions shared by the sensor kernels. |
+| `csrc/camera_kernel.hip.h` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/hip/csrc/quaternion.hip.h`. |
+| `csrc/ftheta_kernel.hip.h` / `.hip` / `_backward.hip` | FTheta device math, forward kernels, and backward kernels. |
+| `csrc/fisheye_kernel.hip.h` / `.hip` / `_backward.hip` | OpenCV fisheye device math, forward kernels, and backward kernels. |
+| `csrc/external_distortion_kernel.hip.h` | `BivariateWindshieldParams` + `NoExternalDistortion_Parameters` no-op tag + header-only bivariate distortion math (no companion `.hip`). |
+| `csrc/math.hip.h` | `safe_nonzero`, `add3 / sub3 / scale3 / dot3`, `normalize3` forward and backward. |
+| `gsplat/geometry/.../coordinate_conversions.hip.h` | Geometry-owned header-only `sincos_t` and `spherical_to_cartesian` / `cartesian_to_spherical` ray<->angle conversions shared by the sensor kernels. |
 | `csrc/shutter_type.h` | `gsplat_sensors::ShutterType` enum class (source of truth; verified at Python import). |
 | `csrc/lidar_params.h` | `gsplat_sensors::SpinningDirection` enum class (source of truth; verified at Python import) + `RowOffsetStructuredSpinningLidarProjection_KernelParameters` POD + LiDAR forward/backward `_launch` prototypes. |
-| `csrc/lidar_kernel.cuh` | LiDAR device math for table lookup, rolling-shutter timing, FOV checks, and pose interpolation helpers; the spherical<->cartesian ray/angle conversions and `sincos_t` are owned by `gsplat/geometry/kernels/cuda/csrc/coordinate_conversions.cuh`. |
-| `csrc/camera_kernel.cu` | Thirteen forward `__global__` kernels + matching `_forward_launch` definitions. |
-| `csrc/camera_kernel_backward.cu` | Twelve backward `__global__` kernels + matching `_backward_launch` definitions; isolated TU so forward and backward can be compiled and reviewed independently. |
+| `csrc/lidar_kernel.hip.h` | LiDAR device math for table lookup, rolling-shutter timing, FOV checks, and pose interpolation helpers; the spherical<->cartesian ray/angle conversions and `sincos_t` are owned by `gsplat/geometry/kernels/hip/csrc/coordinate_conversions.hip.h`. |
+| `csrc/camera_kernel.hip` | Thirteen forward `__global__` kernels + matching `_forward_launch` definitions. |
+| `csrc/camera_kernel_backward.hip` | Twelve backward `__global__` kernels + matching `_backward_launch` definitions; isolated TU so forward and backward can be compiled and reviewed independently. |
 | `csrc/camera_torch.h` / `.cpp` | Projection host structs + per-pair Torch entries + `generate_image_points` + the `check_*` validators called from `ext.cpp`. |
 | `csrc/external_distortion_torch.h` / `.cpp` | `NoExternalDistortion` and `BivariateWindshieldDistortion` host structs + `to_kernel_params()` + `check_bivariate_windshield_distortion`. |
-| `csrc/lidar_kernel.cu` / `lidar_kernel_backward.cu` | LiDAR forward and backward `__global__` kernels + typed launch definitions. |
+| `csrc/lidar_kernel.hip` / `lidar_kernel_backward.hip` | LiDAR forward and backward `__global__` kernels + typed launch definitions. |
 | `csrc/lidar_torch.h` / `.cpp` | `RowOffsetStructuredSpinningLidarProjection` host struct + LiDAR Torch entries + validators called from `ext.cpp`. |
 
 ## Build configuration
 
 The extension is built via `torch.utils.cpp_extension.load` driven by
-`build_and_load_sensors_cuda` in `kernels/cuda/build.py`. The extension name
-is `gsplat_sensors_cuda`. Both host C++ and nvcc compile at `-std=c++20`
-(MSVC: `/std:c++20` with `/Zc:preprocessor` mirrored into nvcc via
-`-Xcompiler`); host and nvcc flags are populated independently rather than
+`build_and_load_sensors_hip` in `kernels/hip/build.py`. The extension name
+is `gsplat_sensors_hip`. Both host C++ and hipcc compile at `-std=c++20`
+(MSVC: `/std:c++20` with `/Zc:preprocessor` mirrored into hipcc via
+`-Xcompiler`); host and hipcc flags are populated independently rather than
 folded together on Windows. Sources split cleanly between compilers:
 
-- `nvcc`: `camera_kernel.cu`, `camera_kernel_backward.cu`,
-  `ftheta_kernel.cu`, `ftheta_kernel_backward.cu`, `fisheye_kernel.cu`,
-  `fisheye_kernel_backward.cu`, `lidar_kernel.cu`, `lidar_kernel_backward.cu`.
+- `hipcc`: `camera_kernel.hip`, `camera_kernel_backward.hip`,
+  `ftheta_kernel.hip`, `ftheta_kernel_backward.hip`, `fisheye_kernel.hip`,
+  `fisheye_kernel_backward.hip`, `lidar_kernel.hip`, `lidar_kernel_backward.hip`.
 - Host C++: `ext.cpp`, `camera_torch.cpp`, `external_distortion_torch.cpp`,
   `lidar_torch.cpp`.
 
-`extra_include_paths` pulls in `gsplat/geometry/kernels/cuda/csrc` so the CUDA
-TUs can `#include` geometry headers (`quaternion.cuh`, `pose.cuh`,
-`coordinate_conversions.cuh`) from the geometry module without duplicating
+`extra_include_paths` pulls in `gsplat/geometry/kernels/hip/csrc` so the CUDA
+TUs can `#include` geometry headers (`quaternion.hip.h`, `pose.hip.h`,
+`coordinate_conversions.hip.h`) from the geometry module without duplicating
 quaternion, SE3-transform, or ray/angle coordinate-conversion device math.
 
 Environment toggles, honoured at import time:
 
 - `DEBUG=1` switches `-O3 -DNDEBUG` to `-g -O0`.
-- `NVCC_FLAGS` is a space-separated list forwarded to nvcc.
+- `HIPCC_FLAGS` is a space-separated list forwarded to hipcc.
 - `VERBOSE=1` enables verbose JIT load.
 - `GSPLAT_BUILD_LOCK_AGE_S` (default 1800s) bounds how long a stale ninja
   lock is tolerated before removal.
@@ -367,7 +367,7 @@ The build emits a JSON snapshot of every flag and source path into
 directory is wiped and rebuilt cleanly so a stale `.so` cannot survive a
 compiler-flag toggle.
 
-`_backend.py` prefers importing the prebuilt `gsplat_sensors_cuda` wheel on
+`_backend.py` prefers importing the prebuilt `gsplat_sensors_hip` wheel on
 process start and only falls through to the JIT path if that import fails or
 if `GSPLAT_SENSORS_FORCE_JIT=1` is set. The JIT path is the dev workflow;
 the wheel path is the deployment workflow.
@@ -415,7 +415,7 @@ the wheel path is the deployment workflow.
   five ops against oracles derived at runtime from the reference sensor JSONs
   (`generic`, with per-row offsets, and `waymo`, without) — analytic cases,
   table-gather reference, round-trip recovery, and fp64 gradcheck.
-- `kernels/test_backend.py` covers `gsplat_sensors_cuda` import behaviour
+- `kernels/test_backend.py` covers `gsplat_sensors_hip` import behaviour
   (prebuilt vs JIT, `GSPLAT_SENSORS_FORCE_JIT`).
 - Public-API-shape tests (return-type dataclasses, `Pose | DynamicPose`
   handling, the `CameraModel` surface) live one layer up in
@@ -425,7 +425,7 @@ the wheel path is the deployment workflow.
 ## Design Constraints
 
 - CUDA and Torch translation units stay strictly isolated; they meet only
-  through `*_params.h` bridge headers and a forward-declared `cudaStream_t`.
+  through `*_params.h` bridge headers and a forward-declared `hipStream_t`.
 - Camera intrinsics and pose state are stored as per-component
   `at::Tensor` members on the host struct, never as packed scalar arrays —
   this keeps autograd visibility on every component.

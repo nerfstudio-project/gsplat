@@ -36,7 +36,7 @@ import torch.nn.functional as F
 
 import gsplat
 
-from gsplat.cuda._backend import _C
+from gsplat.hip._backend import _C
 
 if _C is None:
     pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
@@ -50,7 +50,7 @@ from gsplat._helper import (
     assert_grad_sparsity,
 )
 
-from gsplat.cuda._wrapper import (
+from gsplat.hip._wrapper import (
     CameraModel,
     RollingShutterType,
     UnscentedTransformParameters,
@@ -58,10 +58,10 @@ from gsplat.cuda._wrapper import (
     has_camera_wrappers,
     create_camera_model,
 )
-from gsplat.cuda._math import _safe_normalize
-from gsplat.cuda._torch_cameras import _viewmat_to_pose
-from gsplat.cuda._constants import ALPHA_THRESHOLD
-from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
+from gsplat.hip._math import _safe_normalize
+from gsplat.hip._torch_cameras import _viewmat_to_pose
+from gsplat.hip._constants import ALPHA_THRESHOLD
+from gsplat.hip._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
 
 device = torch.device("cuda:0")
 
@@ -113,8 +113,8 @@ def test_data():
 @pytest.mark.parametrize("triu", [False, True])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int, ...]):
-    from gsplat.cuda._math import _quat_scale_to_covar_preci
-    from gsplat.cuda._wrapper import quat_scale_to_covar_preci
+    from gsplat.hip._math import _quat_scale_to_covar_preci
+    from gsplat.hip._wrapper import quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -212,13 +212,13 @@ def test_proj(
     camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
-    from gsplat.cuda._torch_impl import (
+    from gsplat.hip._torch_impl import (
         _fisheye_proj,
         _ortho_proj,
         _persp_proj,
         _world_to_cam,
     )
-    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci
+    from gsplat.hip._wrapper import proj, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -361,8 +361,8 @@ def test_projection(
     camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
-    from gsplat.cuda._torch_impl import _fully_fused_projection
-    from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
+    from gsplat.hip._torch_impl import _fully_fused_projection
+    from gsplat.hip._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -517,7 +517,7 @@ def test_fully_fused_projection_packed(
     camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
-    from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
+    from gsplat.hip._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -732,8 +732,8 @@ def test_fully_fused_projection_ut(
         require_all_valid: UT parameter for sigma point validity
         rolling_shutter: Rolling shutter mode (GLOBAL, ROLLING_*, etc.)
     """
-    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
-    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+    from gsplat.hip._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.hip._wrapper import fully_fused_projection_with_ut
 
     # Expand test data to batch dimensions
     test_data = expand(test_data, batch_dims)
@@ -1032,7 +1032,7 @@ def test_fully_fused_projection_ut(
 )
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_fully_fused_projection_ut_ortho_rejects_radial_coeffs(test_data):
-    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+    from gsplat.hip._wrapper import fully_fused_projection_with_ut
 
     N = test_data["means"].shape[-2]
     C = test_data["viewmats"].shape[-3]
@@ -1080,8 +1080,8 @@ def test_fully_fused_projection_ut_ortho_rejects_radial_coeffs(test_data):
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_isect(test_data, dtype: torch.dtype, batch_dims: Tuple[int, ...]):
-    from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
-    from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
+    from gsplat.hip._torch_impl import _isect_offset_encode, _isect_tiles
+    from gsplat.hip._wrapper import isect_offset_encode, isect_tiles
 
     torch.manual_seed(42)
 
@@ -1131,11 +1131,11 @@ def test_isect(test_data, dtype: torch.dtype, batch_dims: Tuple[int, ...]):
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize("lidar_model", ["pandar128", "at128"])
 def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
-    from gsplat.cuda._torch_impl_lidar import (
+    from gsplat.hip._torch_impl_lidar import (
         _isect_tiles_lidar,
         ANGLE_TO_PIXEL_SCALING_FACTOR,
     )
-    from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles_lidar
+    from gsplat.hip._wrapper import isect_offset_encode, isect_tiles_lidar
     from tests.test_cameras import parse_lidar_camera
 
     torch.manual_seed(42)
@@ -1179,7 +1179,7 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
 
 @pytest.fixture
 def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
-    from gsplat.cuda._lidar import LidarTiling
+    from gsplat.hip._lidar import LidarTiling
 
     # The actual vfov span value is not relevant, as long as it's within elevation range.
     vfov_span_deg = 90
@@ -2282,9 +2282,9 @@ def test_isect_lidar_corner_cases(
     gaussian_param,
     expected_tiles: int,
 ):
-    from gsplat.cuda._torch_impl_lidar import _isect_tiles_lidar
-    from gsplat.cuda._wrapper import isect_tiles_lidar
-    from gsplat.cuda._lidar import relative_angle
+    from gsplat.hip._torch_impl_lidar import _isect_tiles_lidar
+    from gsplat.hip._wrapper import isect_tiles_lidar
+    from gsplat.hip._lidar import relative_angle
 
     # Convenient aliases
     lidar = lidar_param
@@ -2343,8 +2343,8 @@ def test_isect_lidar_corner_cases(
 @pytest.mark.parametrize("channels", [3, 32, 128])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ...]):
-    from gsplat.cuda._torch_impl import _rasterize_to_pixels
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._torch_impl import _rasterize_to_pixels
+    from gsplat.hip._wrapper import (
         fully_fused_projection,
         isect_offset_encode,
         isect_tiles,
@@ -2507,7 +2507,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 def test_rasterize_num_contributing_gaussians(tile_size: int):
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         isect_offset_encode,
         isect_tiles,
         rasterize_num_contributing_gaussians,
@@ -2692,7 +2692,7 @@ def _assert_top_contributors_are_largest_weights(
 @pytest.mark.parametrize("tile_size", [4, 16])
 @pytest.mark.parametrize("packed", [False, True])
 def test_rasterize_contributing_gaussian_ids(tile_size: int, packed: bool):
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         isect_offset_encode,
         isect_tiles,
         rasterize_contributing_gaussian_ids,
@@ -2811,7 +2811,7 @@ def test_rasterize_contributing_gaussian_ids(tile_size: int, packed: bool):
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 def test_rasterize_contributing_gaussian_ids_early_termination(tile_size: int):
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         isect_offset_encode,
         isect_tiles,
         rasterize_contributing_gaussian_ids,
@@ -2867,7 +2867,7 @@ def test_rasterize_contributing_gaussian_ids_early_termination(tile_size: int):
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 def test_rasterize_contributing_gaussian_ids_empty_counts(tile_size: int):
-    from gsplat.cuda._wrapper import rasterize_contributing_gaussian_ids
+    from gsplat.hip._wrapper import rasterize_contributing_gaussian_ids
 
     width, height = 7, 6
     tile_width = math.ceil(width / float(tile_size))
@@ -2910,7 +2910,7 @@ def test_rasterize_contributing_gaussian_ids_empty_counts(tile_size: int):
 def test_rasterize_top_contributing_gaussian_ids(
     tile_size: int, num_depth_samples: int, packed: bool
 ):
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         isect_offset_encode,
         isect_tiles,
         rasterize_contributing_gaussian_ids,
@@ -3057,7 +3057,7 @@ def test_rasterize_top_contributing_gaussian_ids(
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 def test_rasterize_top_contributing_gaussian_ids_early_termination(tile_size: int):
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         isect_offset_encode,
         isect_tiles,
         rasterize_contributing_gaussian_ids,
@@ -3153,8 +3153,8 @@ def _expected_hit_distance_canonical_ray_distance(
     scales: torch.Tensor,
 ) -> float:
     """Expected hit distance using the formula: length(scale * grd * hit_t)."""
-    from gsplat.cuda._math import _quat_scale_to_preci_half
-    from gsplat.cuda._torch_impl_eval3d import _safe_normalize
+    from gsplat.hip._math import _quat_scale_to_preci_half
+    from gsplat.hip._torch_impl_eval3d import _safe_normalize
 
     # iscl_rot = M^T with M = R * S (inverse scale-rotation); batch size 1
     M = _quat_scale_to_preci_half(quats, scales)
@@ -3245,7 +3245,7 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
     length(scale * grd * hit_t) with hit_t = dot(grd, -gro). Includes center and off-center
     pixels. Failures indicate the rasterization hit-distance code should be analyzed and fixed.
     """
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
@@ -3424,8 +3424,8 @@ def test_rasterize_to_pixels_eval3d(
     camera_model: CameraModel,
     tile_size: int,
 ):
-    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
@@ -3501,8 +3501,8 @@ def test_rasterize_to_pixels_eval3d(
         viewmats_rs = None
 
     if use_rays:
-        from gsplat.cuda._torch_cameras import _BaseCameraModel
-        from gsplat.cuda._torch_impl_eval3d import _generate_rays
+        from gsplat.hip._torch_cameras import _BaseCameraModel
+        from gsplat.hip._torch_impl_eval3d import _generate_rays
 
         camera = _BaseCameraModel.create(
             width=width,
@@ -4168,7 +4168,7 @@ def test_eval3d_masked_tile_writes_safe_defaults(tile_size, renderer_config):
     # The public binding allocates outputs internally with at::empty. If a
     # kernel store is accidentally skipped, stale allocator contents could
     # still match these expected defaults and let this test pass.
-    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+    from gsplat.hip._wrapper import rasterize_to_pixels_eval3d_extra
 
     width = height = tile_size
     channels = 3
@@ -4267,7 +4267,7 @@ def test_eval3d_unsafe_masked_tile_outputs_match_safe_outputs_on_active_tiles(
     tile_size,
     renderer_config,
 ):
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
@@ -4384,7 +4384,7 @@ def test_eval3d_unsafe_masked_tile_outputs_match_safe_outputs_on_active_tiles(
 
 @pytest.fixture
 def small_scene():
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
@@ -4467,7 +4467,7 @@ class GradResult(Enum):
 def _call_rasterize_eval3d_extra(
     inputs, renderer_config, return_last_ids=False, return_sample_counts=False
 ):
-    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+    from gsplat.hip._wrapper import rasterize_to_pixels_eval3d_extra
 
     return rasterize_to_pixels_eval3d_extra(
         inputs["means"],
@@ -4616,8 +4616,8 @@ def test_rasterize_eval3d_autograd_tracks_any_tensor_input(
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterize_eval3d_parallel_batch_no_t_underflow_across_batches():
     """ParallelBatch fwd transmittance must not underflow across batches."""
-    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
@@ -4708,7 +4708,7 @@ def test_rasterize_eval3d_parallel_batch_no_t_underflow_across_batches():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterize_eval3d_parallel_batch_backward_accepts_unused_normals():
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
@@ -4792,8 +4792,8 @@ def test_rasterize_eval3d_parallel_batch_backward_accepts_unused_normals():
 )
 def test_fwd_last_ids_match_ref_under_saturation(renderer_config_name):
     """Strict last_ids equality vs Python ref under heavy saturation."""
-    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
@@ -4923,7 +4923,7 @@ def test_fwd_last_ids_match_ref_under_saturation(renderer_config_name):
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_parallel_batch_fwd_only_omits_debug_metadata():
     """Fwd-only ParallelBatch should match exact output without metadata."""
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
@@ -5064,7 +5064,7 @@ def _ghost_lobe_scene():
 @pytest.fixture
 def _ghost_lobe_isect(_ghost_lobe_scene):
     """Intersection list with radii inflated to cover every tile."""
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         isect_offset_encode,
         isect_tiles,
     )
@@ -5127,8 +5127,8 @@ def test_rasterize_eval3d_no_behind_camera_ghost_lobe(
     The alpha formula uses |cross(grd, gro)|² — distance to the infinite ray
     line — so without a hit_t >= 0 clamp it produces a bilateral ghost lobe.
     """
-    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.hip._wrapper import (
         rasterize_to_pixels_eval3d_extra,
         RollingShutterType,
     )
@@ -5177,13 +5177,13 @@ def test_rasterize_eval3d_no_behind_camera_ghost_lobe(
     )
 
     # Precondition: right half must have visible alpha (otherwise test is vacuous).
-    for tag, alphas in [("CUDA", cuda_alphas), ("ref", ref_alphas)]:
+    for tag, alphas in [("hip", cuda_alphas), ("ref", ref_alphas)]:
         assert (
             alphas[..., s.cx_int :, :].max().item() > ALPHA_THRESHOLD
         ), f"{tag}: visible-direction pixels have no alpha — test setup is degenerate."
 
     # Fwd invariant: ghost-direction pixels (hit_t<0) must have zero alpha.
-    for tag, alphas in [("CUDA", cuda_alphas), ("ref", ref_alphas)]:
+    for tag, alphas in [("hip", cuda_alphas), ("ref", ref_alphas)]:
         left_max = alphas[..., : s.cx_int, :].max().item()
         assert left_max < ALPHA_THRESHOLD, (
             f"{tag}: ghost lobe present (max alpha={left_max:.4e}). "
@@ -5606,7 +5606,7 @@ def test_rasterization_cpp_classic_sparse_grad_layout():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_cpp_classic_covars_input_path():
-    from gsplat.cuda._wrapper import quat_scale_to_covar_preci
+    from gsplat.hip._wrapper import quat_scale_to_covar_preci
 
     torch.manual_seed(23)
     scene = _make_cpp_classic_rasterization_scene()
@@ -6163,8 +6163,8 @@ def test_rasterization_eval3d_accepts_broadcastable_rays_shape():
 @pytest.mark.parametrize("packed", [False, True])
 @pytest.mark.parametrize("D", [1, 3, 5])
 def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
-    from gsplat.cuda._torch_impl import _spherical_harmonics
-    from gsplat.cuda._wrapper import spherical_harmonics
+    from gsplat.hip._torch_impl import _spherical_harmonics
+    from gsplat.hip._wrapper import spherical_harmonics
 
     if packed and batch_dims != ():
         pytest.skip("packed inputs are always rank-2 dirs; batch_dims is irrelevant")
@@ -6172,26 +6172,57 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
     torch.manual_seed(42)
 
     N = 1000
+    C = 3
     K = (4 + 1) ** 2
     coeffs_src = torch.randn(N, K, D, device=device, requires_grad=True)
+    means = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(*batch_dims, C, 4, 4).clone()
+    angles = torch.randn(*batch_dims, C, device=device)
+    viewmats[..., 0, 0] = angles.cos()
+    viewmats[..., 0, 1] = -angles.sin()
+    viewmats[..., 1, 0] = angles.sin()
+    viewmats[..., 1, 1] = angles.cos()
+    viewmats[..., :3, 3] = torch.randn(*batch_dims, C, 3, device=device)
+    viewmats.requires_grad_(True)
 
     if packed:
         # Mirror the packed call site (rendering.py): a [N, K, D] source of
         # per-Gaussian coeffs is gathered into [nnz, K, D] via gaussian_ids
-        # (one row per visible (Gaussian, camera) pair), and dirs is [nnz, 3].
+        # (one row per visible (Gaussian, camera) pair).
         # nnz > N with random ids exercises the duplicate-gaussian regime that
         # the unpacked broadcast path never hits.
         nnz = 3000
         gaussian_ids = torch.randint(0, N, (nnz,), device=device)
+        # duplicates required: gather-VJP accumulation is the point of packed mode
+        assert gaussian_ids.unique().numel() < nnz
+        batch_ids = torch.zeros(nnz, dtype=torch.long, device=device)
+        camera_ids = torch.randint(0, C, (nnz,), device=device)
         coeffs = coeffs_src[gaussian_ids]  # [nnz, K, D]
-        dirs = torch.randn(nnz, 3, device=device, requires_grad=True)
+        rotations = viewmats[camera_ids, :3, :3]
+        translations = viewmats[camera_ids, :3, 3]
+        dirs = means[gaussian_ids] + torch.bmm(
+            rotations.transpose(-1, -2), translations.unsqueeze(-1)
+        ).squeeze(-1)
         expected_colors_shape = (nnz, D)
     else:
         coeffs = coeffs_src
-        dirs = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
-        expected_colors_shape = (*batch_dims, N, D)
+        batch_ids = camera_ids = gaussian_ids = None
+        camera_offsets = torch.matmul(
+            viewmats[..., :3, :3].transpose(-1, -2),
+            viewmats[..., :3, 3].unsqueeze(-1),
+        ).squeeze(-1)
+        dirs = means[..., None, :, :] + camera_offsets[..., :, None, :]
+        expected_colors_shape = (*batch_dims, C, N, D)
 
-    colors = spherical_harmonics(sh_degree, dirs, coeffs)
+    colors = spherical_harmonics(
+        sh_degree,
+        means,
+        viewmats,
+        coeffs,
+        batch_ids=batch_ids,
+        camera_ids=camera_ids,
+        gaussian_ids=gaussian_ids,
+    )
     _colors = _spherical_harmonics(sh_degree, dirs, coeffs)
     assert colors.shape == expected_colors_shape, colors.shape
     torch.testing.assert_close(colors, _colors, rtol=1e-4, atol=1e-4)
@@ -6200,15 +6231,15 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
 
     # Take grads w.r.t. coeffs_src (the [N, K, D] leaf) so packed mode also
     # exercises the gather VJP that accumulates duplicate-id rows back to source.
-    v_coeffs_src, v_dirs = torch.autograd.grad(
+    v_coeffs_src, v_means, v_viewmats = torch.autograd.grad(
         (colors * v_colors).sum(),
-        (coeffs_src, dirs),
+        (coeffs_src, means, viewmats),
         retain_graph=True,
         allow_unused=True,
     )
-    _v_coeffs_src, _v_dirs = torch.autograd.grad(
+    _v_coeffs_src, _v_means, _v_viewmats = torch.autograd.grad(
         (_colors * v_colors).sum(),
-        (coeffs_src, dirs),
+        (coeffs_src, means, viewmats),
         retain_graph=True,
         allow_unused=True,
     )
@@ -6225,53 +6256,69 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
         msg="v_coeffs_src",
     )
     if sh_degree > 0:
-        assert v_dirs.shape == dirs.shape, v_dirs.shape
+        assert v_means.shape == means.shape, v_means.shape
         assert_grad_reference_close(
-            v_dirs,
-            _v_dirs,
+            v_means,
+            _v_means,
             rtol=1e-4,
             atol=1e-4,
             max_rel_l2=1e-3,
             max_rel_l1=1e-3,
             min_cosine=0.999999,
             max_signed_bias=1e-3,
-            msg="v_dirs",
+            msg="v_means",
+        )
+        assert_grad_reference_close(
+            v_viewmats,
+            _v_viewmats,
+            rtol=1e-4,
+            # atomicAdd accumulation over N gaussians is non-deterministic, so
+            # small-magnitude entries can drift slightly past a 1e-4 floor; the
+            # aggregate guards below keep the overall gradient tight.
+            atol=2e-3,
+            max_rel_l2=1e-3,
+            max_rel_l1=1e-3,
+            min_cosine=0.999999,
+            max_signed_bias=1e-3,
+            msg="v_viewmats",
         )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_sh_backward_accepts_strided_output_grad():
     """SH backward should accept channel-slice gradients from downstream cats."""
-    from gsplat.cuda._wrapper import spherical_harmonics
+    from gsplat.hip._wrapper import spherical_harmonics
 
     torch.manual_seed(42)
 
     N, K, D = 128, (3 + 1) ** 2, 3
-    dirs = torch.randn(2, N, 3, device=device, requires_grad=True)
+    means = torch.randn(2, N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(2, 1, 4, 4).clone().requires_grad_(True)
     coeffs = torch.randn(N, K, D, device=device, requires_grad=True)
 
-    colors = spherical_harmonics(3, dirs, coeffs)
+    colors = spherical_harmonics(3, means, viewmats, coeffs).squeeze(-3)
     grad_storage = torch.randn(2, N, D * 2, device=device)
     v_colors = grad_storage[..., :D]
     assert not v_colors.is_contiguous()
 
-    v_coeffs, v_dirs = torch.autograd.grad(colors, (coeffs, dirs), v_colors)
+    v_coeffs, v_means = torch.autograd.grad(colors, (coeffs, means), v_colors)
 
     assert torch.isfinite(v_coeffs).all()
-    assert torch.isfinite(v_dirs).all()
+    assert torch.isfinite(v_means).all()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_sh_zero_channels():
     """Test that an error is thrown when D = 0 (i.e. empty per-Gaussian feature)"""
-    from gsplat.cuda._wrapper import spherical_harmonics
+    from gsplat.hip._wrapper import spherical_harmonics
 
     N = 8
     K = (4 + 1) ** 2
-    dirs = torch.randn(N, 3, device=device)
+    means = torch.randn(N, 3, device=device)
+    viewmats = torch.eye(4, device=device).expand(1, 4, 4).clone()
     coeffs = torch.randn(N, K, 0, device=device)
     with pytest.raises(RuntimeError):
-        spherical_harmonics(0, dirs, coeffs)
+        spherical_harmonics(0, means, viewmats, coeffs)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -6279,8 +6326,8 @@ def test_sh_zero_channels():
 @pytest.mark.parametrize("kernel_path", ["generic", "specialized"])
 def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
     """fp16 SH coeffs through the generic kernel (K != 16) and the K=16 specialized kernel."""
-    from gsplat.cuda._torch_impl import _spherical_harmonics
-    from gsplat.cuda._wrapper import spherical_harmonics
+    from gsplat.hip._torch_impl import _spherical_harmonics
+    from gsplat.hip._wrapper import spherical_harmonics
 
     if kernel_path == "specialized":
         if sh_degree == 4:
@@ -6296,11 +6343,14 @@ def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
     N = 1000
     coeffs_fp32 = torch.randn(N, K, 3, device=device)
     dirs = torch.randn(N, 3, device=device)
+    means_base = dirs
+    viewmats_base = torch.eye(4, device=device).expand(1, 4, 4).clone()
 
     # fp16 coefficients through CUDA kernel
     coeffs_h = coeffs_fp32.half().requires_grad_(True)
-    dirs_h = dirs.clone().requires_grad_(True)
-    colors_h = spherical_harmonics(sh_degree, dirs_h, coeffs_h)
+    dirs_h = means_base.clone().requires_grad_(True)
+    viewmats_h = viewmats_base.clone().requires_grad_(True)
+    colors_h = spherical_harmonics(sh_degree, dirs_h, viewmats_h, coeffs_h).squeeze(-3)
 
     # Reference 1: roundtripped fp16->fp32 through pure-PyTorch (isolates kernel correctness)
     coeffs_ref = coeffs_fp32.half().float().requires_grad_(True)
@@ -6320,12 +6370,13 @@ def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
     # Backward check
     v_colors = torch.randn_like(colors_h)
 
-    v_coeffs_h, v_dirs_h = torch.autograd.grad(
+    v_coeffs_h, v_dirs_h, v_viewmats_h = torch.autograd.grad(
         (colors_h * v_colors).sum(),
-        (coeffs_h, dirs_h),
+        (coeffs_h, dirs_h, viewmats_h),
         retain_graph=True,
         allow_unused=True,
     )
+    assert v_viewmats_h is None or torch.isfinite(v_viewmats_h).all()
     v_coeffs_ref, v_dirs_ref = torch.autograd.grad(
         (colors_ref * v_colors).sum(),
         (coeffs_ref, dirs_ref),
@@ -6414,13 +6465,14 @@ def test_sh_k16_misaligned_coeffs(dtype, sh_degree, storage_offset):
       ushort4 (8-byte): fp16 + degree <= 1
       uint4 (16-byte):  fp16 + degree >= 2, or fp32 at any degree
     """
-    from gsplat.cuda._wrapper import spherical_harmonics
+    from gsplat.hip._wrapper import spherical_harmonics
 
     torch.manual_seed(42)
     N, K = 1000, 16
 
     coeffs_aligned = torch.randn(N, K, 3, device=device, dtype=dtype)
-    dirs = torch.randn(N, 3, device=device)
+    means = torch.randn(N, 3, device=device)
+    viewmats = torch.eye(4, device=device).expand(1, 4, 4).clone()
 
     storage = torch.empty(N * K * 3 + storage_offset, device=device, dtype=dtype)
     storage[:storage_offset] = 0
@@ -6429,8 +6481,8 @@ def test_sh_k16_misaligned_coeffs(dtype, sh_degree, storage_offset):
     assert coeffs_misaligned.is_contiguous()
     assert coeffs_misaligned.storage_offset() == storage_offset
 
-    colors_aligned = spherical_harmonics(sh_degree, dirs, coeffs_aligned)
-    colors_misaligned = spherical_harmonics(sh_degree, dirs, coeffs_misaligned)
+    colors_aligned = spherical_harmonics(sh_degree, means, viewmats, coeffs_aligned)
+    colors_misaligned = spherical_harmonics(sh_degree, means, viewmats, coeffs_misaligned)
 
     torch.testing.assert_close(colors_misaligned, colors_aligned)
 
@@ -6447,7 +6499,7 @@ def _render_alpha(data, quats, scales, means2d, radii, depths, tile_size=8):
     {<8,32>, <16,256>}); default 8 since these helpers exist for projection
     NaN-safety tests where the rasterizer's tile_size is incidental.
     """
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         isect_offset_encode,
         isect_tiles,
         rasterize_to_pixels_eval3d_extra,
@@ -6571,8 +6623,8 @@ def test_projection_ut_zero_quaternion(nan_test_data):
     fminf(MAX_ALPHA, opacity * NaN) = MAX_ALPHA.  A single Gaussian with
     opacity=0.1 renders alpha=0.99 — an impossible value.
     """
-    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
-    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.hip._wrapper import fully_fused_projection_with_ut
+    from gsplat.hip._torch_impl_ut import _fully_fused_projection_with_ut
 
     data = nan_test_data
     N = data["means"].shape[0]
@@ -6671,8 +6723,8 @@ def test_projection_ut_zero_scale_single_axis(nan_test_data):
     under --use_fast_math, fminf(MAX_ALPHA, opacity * NaN) = MAX_ALPHA.
     A single Gaussian with opacity=0.1 renders alpha=0.99 — impossible.
     """
-    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
-    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.hip._wrapper import fully_fused_projection_with_ut
+    from gsplat.hip._torch_impl_ut import _fully_fused_projection_with_ut
 
     data = nan_test_data
     N = data["means"].shape[0]
@@ -6773,13 +6825,13 @@ def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data, tile_size):
     Compares CUDA rasterization against reference to verify they agree on the
     rendered image when degenerate Gaussians are present.
     """
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
         rasterize_to_pixels_eval3d_extra,
     )
-    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.hip._torch_impl_eval3d import _rasterize_to_pixels_eval3d
 
     data = nan_test_data
     N = data["means"].shape[0]
@@ -6898,8 +6950,8 @@ def test_projection_ut_python_ref_no_nan(nan_test_data):
     Without the fix, torch.sqrt(cov_diag) on a negative diagonal produces NaN,
     and torch.linalg.inv on a singular covariance produces NaN/inf.
     """
-    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
-    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.hip._wrapper import fully_fused_projection_with_ut
+    from gsplat.hip._torch_impl_ut import _fully_fused_projection_with_ut
 
     data = nan_test_data
     quats = data["quats"].clone()
@@ -6984,15 +7036,15 @@ def test_backward_high_opacity_no_nan(tile_size):
         Only tests the 3DGUT/FromWorld path.  The 3DGS and 2DGS backward
         kernels have the same one-line MIN_ONE_MINUS_ALPHA fix and are covered
         by the parametrized ``test_rasterize`` gradient-correctness tests.
-        # TODO: add dedicated high-opacity tests for 3DGS/2DGS paths.
+        # Note: add dedicated high-opacity tests for 3DGS/2DGS paths.
     """
-    from gsplat.cuda._wrapper import (
+    from gsplat.hip._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
         rasterize_to_pixels_eval3d_extra,
     )
-    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.hip._torch_impl_eval3d import _rasterize_to_pixels_eval3d
 
     torch.manual_seed(123)
     N = 16
@@ -7200,8 +7252,8 @@ def test_isect_tiles_lidar_double_depth():
     # (non-monotonic), scrambling the within-tile front-to-back order. The
     # double path is reachable from Python (no dtype cast in the wrapper or
     # binding), so the float64 result must match the float32 result tile-for-tile.
-    from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
-    from gsplat.cuda._wrapper import isect_tiles_lidar
+    from gsplat.hip._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
+    from gsplat.hip._wrapper import isect_tiles_lidar
     from tests.test_cameras import parse_lidar_camera
 
     torch.manual_seed(42)
@@ -7243,7 +7295,7 @@ def test_isect_tiles_packed_segmented_rejected():
     # offsets collapse to a single [0, total] buffer; a segmented radix sort
     # over n_images segments would read past it. The op must reject the
     # combination rather than corrupt the sort.
-    from gsplat.cuda._wrapper import isect_tiles
+    from gsplat.hip._wrapper import isect_tiles
 
     torch.manual_seed(42)
     nnz = 8
@@ -7276,7 +7328,7 @@ def test_isect_tiles_packed_segmented_rejected():
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 def test_isect_tiles_lidar_packed_segmented_rejected():
     # Lidar sibling of the camera packed+segmented guard.
-    from gsplat.cuda._wrapper import isect_tiles_lidar
+    from gsplat.hip._wrapper import isect_tiles_lidar
     from tests.test_cameras import parse_lidar_camera
 
     torch.manual_seed(42)
@@ -7321,7 +7373,7 @@ def test_fully_fused_projection_packed_empty(C):
     # gaussian set must be a clean no-op (empty packed tensors) through fwd+bwd.
     # C > 1 also pins the indptr shape contract: a length-1 indptr would pass a
     # bare indptr[-1] check yet drop the per-camera rows the CSR API promises.
-    from gsplat.cuda._wrapper import fully_fused_projection
+    from gsplat.hip._wrapper import fully_fused_projection
 
     W, H = 64, 64
     means = torch.zeros(0, 3, device=device, requires_grad=True)
@@ -7373,7 +7425,7 @@ def test_fully_fused_projection_2dgs_packed_empty(C):
     # must be a clean no-op (empty packed tensors) through fwd+bwd.
     # C > 1 also pins the indptr shape contract: a length-1 indptr would pass a
     # bare indptr[-1] check yet drop the per-camera rows the CSR API promises.
-    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+    from gsplat.hip._wrapper import fully_fused_projection_2dgs
 
     W, H = 64, 64
     means = torch.zeros(0, 3, device=device, requires_grad=True)
@@ -7422,7 +7474,7 @@ def test_fully_fused_projection_packed_grid_y_limit():
     # The packed forward launcher maps B*C onto grid.y, which CUDA caps at
     # 65535. A larger B*C must raise a clear error instead of issuing an invalid
     # kernel launch. Here B=1 and C=65536 (one camera over the cap).
-    from gsplat.cuda._wrapper import fully_fused_projection
+    from gsplat.hip._wrapper import fully_fused_projection
 
     W, H = 32, 32
     N, C = 1, 65536
@@ -7456,8 +7508,8 @@ def test_isect_offset_power_of_two_tiles(tile_width: int, tile_height: int):
     # mismatch corrupts the decoded tile ids and the offset buffer, so the CUDA
     # packing, the CUDA offset decode, and the Python reference must all agree
     # at these counts.
-    from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
-    from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
+    from gsplat.hip._torch_impl import _isect_offset_encode, _isect_tiles
+    from gsplat.hip._wrapper import isect_offset_encode, isect_tiles
 
     torch.manual_seed(42)
     # C >= 3 so the image id occupies bits above the tile field: a wrong
@@ -7499,7 +7551,7 @@ def test_rasterize_to_indices_in_range_empty():
     # any emptiness guard; with zero gaussians (N == 0) the divisor is zero -- a
     # host-side integer division by zero. An empty gaussian set must be a clean
     # no-op returning empty index tensors.
-    from gsplat.cuda._wrapper import rasterize_to_indices_in_range
+    from gsplat.hip._wrapper import rasterize_to_indices_in_range
 
     C = 1
     W = H = 16
@@ -7536,7 +7588,7 @@ def test_rasterize_to_pixels_eval3d_empty():
     # any emptiness guard; with zero gaussians (N == 0) the divisor is zero -- a
     # host-side integer division by zero. An empty gaussian set must be a clean
     # no-op rather than crashing.
-    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+    from gsplat.hip._wrapper import rasterize_to_pixels_eval3d_extra
 
     C = 1
     W = H = 16

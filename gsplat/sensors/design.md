@@ -43,7 +43,7 @@ and a structured spinning-LiDAR slice:
   `BivariateWindshieldDistortion`.
 - Shutter modes: `GLOBAL`, `ROLLING_TOP_TO_BOTTOM`, `ROLLING_LEFT_TO_RIGHT`,
   `ROLLING_BOTTOM_TO_TOP`, `ROLLING_RIGHT_TO_LEFT` (defined in
-  `kernels/cuda/csrc/shutter_type.h` and bound to a Python `IntEnum`).
+  `kernels/hip/csrc/shutter_type.h` and bound to a Python `IntEnum`).
 - Camera operations re-exported by `functional/`: ray ↔ image-point
   conversion, mean-pose and rolling-shutter world-point projection,
   static-pose and rolling-shutter back-projection to world rays, and pixel
@@ -111,32 +111,32 @@ gsplat/sensors/
       ext.cpp
       csrc/
         camera_params.h
-        camera_kernel.cuh
-        camera_kernel.cu
-        camera_kernel_backward.cu
-        ftheta_kernel.cuh
-        ftheta_kernel.cu
-        ftheta_kernel_backward.cu
-        fisheye_kernel.cuh
-        fisheye_kernel.cu
-        fisheye_kernel_backward.cu
+        camera_kernel.hip.h
+        camera_kernel.hip
+        camera_kernel_backward.hip
+        ftheta_kernel.hip.h
+        ftheta_kernel.hip
+        ftheta_kernel_backward.hip
+        fisheye_kernel.hip.h
+        fisheye_kernel.hip
+        fisheye_kernel_backward.hip
         camera_torch.h
         camera_torch.cpp
         external_distortion_params.h
-        external_distortion_kernel.cuh
+        external_distortion_kernel.hip.h
         external_distortion_torch.h
         external_distortion_torch.cpp
-        ftheta_kernel.cuh
-        ftheta_kernel.cu
-        ftheta_kernel_backward.cu
+        ftheta_kernel.hip.h
+        ftheta_kernel.hip
+        ftheta_kernel_backward.hip
         lidar_params.h
-        lidar_kernel.cuh
-        lidar_kernel.cu
-        lidar_kernel_backward.cu
+        lidar_kernel.hip.h
+        lidar_kernel.hip
+        lidar_kernel_backward.hip
         lidar_torch.h
         lidar_torch.cpp
         shutter_type.h
-        math.cuh
+        math.hip.h
   models/
     __init__.py
     cameras/
@@ -176,8 +176,8 @@ tables. `kernels/lidars/dispatch.py` owns the single-key LiDAR dispatch tables.
 - **`kernels/`** — backend implementation layer. Owns native CUDA sources,
   the `torch::class_<>` parameter-type registrations, the Python wrappers
   with `torch.autograd.Function` glue, cross-family Python dispatch tables,
-  and the build configuration for `gsplat_sensors_cuda`. The three-tier C++
-  representation (bridge POD / CUDA-only / Torch-only), templated kernel
+  and the build configuration for `gsplat_sensors_hip`. The three-tier C++
+  representation (bridge POD / HIP-only / Torch-only), templated kernel
   structure, and dispatch-table layout are covered in `design-kernels.md`.
 - **`models/`** — higher-level stateful layer. Provides a single concrete
   `CameraModel(nn.Module)` that holds a `CameraProjection` +
@@ -215,7 +215,7 @@ implementation details hidden behind `functional/`.
 ## Dependency Boundaries
 
 ```text
-functional/  ->  kernels/  ->  kernels/cuda/
+functional/  ->  kernels/  ->  kernels/hip/
 models/      ->  functional/ and kernels/{cameras,lidars,common}
 ```
 
@@ -246,7 +246,7 @@ constraints live in each per-layer doc.
 - Public stateless sensor functions live exclusively in `functional/`. Kernel
   Python wrappers below it return raw `tuple[Tensor, ...]`.
 - Native sources are split per family into three tiers with strict isolation:
-  a POD bridge header (`*_params.h`), CUDA-only `*_kernel.cuh` / `.cu`, and
+  a POD bridge header (`*_params.h`), HIP-only `*_kernel.hip.h` / `.hip`, and
   Torch-only `*_torch.h` / `.cpp`. Only the bridge POD and `shutter_type.h`
   are shared between the two halves.
 - Sensor parameter types (`OpenCVPinholeProjection`, `FThetaProjection`,

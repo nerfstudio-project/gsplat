@@ -14,11 +14,11 @@
 # limitations under the License.
 """Unit tests for the sparse 3DGS rasterizer.
 
-Validates ``gsplat.cuda._wrapper.rasterize_to_pixels_sparse`` against the dense
+Validates ``gsplat.hip._wrapper.rasterize_to_pixels_sparse`` against the dense
 rasterizer ``rasterize_to_pixels``: the sparse op must reproduce, at each
 requested pixel, exactly the dense rendering -- in both the forward outputs and
 the input gradients. Both paths share the same per-gaussian blending math
-(``RasterizeToPixels3DGSDevice.cuh``); only tile iteration and pixel addressing
+(``RasterizeToPixels3DGSDevice.hip.h``); only tile iteration and pixel addressing
 differ, so the dense op is the natural oracle. The dense and sparse tile
 intersections (``isect_tiles`` / ``isect_tiles_sparse``) feed the same gaussians
 per active tile, so an exact match is expected up to floating-point noise.
@@ -32,7 +32,7 @@ import torch
 device = torch.device("cuda:0")
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="rasterize_to_pixels_sparse is CUDA-only"
+    not torch.cuda.is_available(), reason="rasterize_to_pixels_sparse is HIP-only"
 )
 
 

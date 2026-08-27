@@ -36,7 +36,7 @@ from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 # Default fraction of *post-CUDA-context* free VRAM the test process is
 # allowed to use. Caps the PyTorch caching allocator so an over-allocation
 # OOMs cleanly instead of spilling into the OS-managed shared/system memory
-# pool — that pool is ~30+ GB on Windows/WSL2 hosts but orders of magnitude
+# pool â€” that pool is ~30+ GB on Windows/WSL2 hosts but orders of magnitude
 # slower than dedicated VRAM, and the spill is what makes the machine
 # appear to hang.
 #
@@ -179,13 +179,13 @@ def _cap_cuda_memory_fraction(request):
 
 
 # --------------------------------------------------------------------------
-# Per-test GPU memory tracking — opt-in via --mem-track.
+# Per-test GPU memory tracking â€” opt-in via --mem-track.
 #
 # When enabled, records two metrics per test:
-#   * `torch_peak`  — peak bytes managed by torch's caching allocator
+#   * `torch_peak`  â€” peak bytes managed by torch's caching allocator
 #                     (`torch.cuda.max_memory_allocated`). Tightly attributed
 #                     to the test's torch operations.
-#   * `device_peak` — peak total VRAM in use as seen by the CUDA driver,
+#   * `device_peak` â€” peak total VRAM in use as seen by the CUDA driver,
 #                     sampled from a background thread at ~20 Hz via
 #                     `cudaMemGetInfo`. Includes context overhead and any
 #                     other CUDA allocator on the same device.

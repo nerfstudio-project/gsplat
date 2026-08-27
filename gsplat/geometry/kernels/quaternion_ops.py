@@ -18,7 +18,7 @@
 All functions follow the same conventions:
 - Quaternion format: float4 in xyzw order (x, y, z, w)
 - Unit quaternions represent rotations in 3D space
-- All operations require the `gsplat_geometry_cuda` extension on CUDA tensors
+- All operations require the `gsplat_geometry_hip` extension on CUDA tensors
 - Paired quaternion/vector inputs do not broadcast implicitly; matching batch shapes
   are required unless a function explicitly documents a narrower exception
 """
@@ -32,7 +32,7 @@ from torch import Tensor
 from . import _backend
 
 SLERP_SMALL_ANGLE_DOT_THRESHOLD = float(
-    _backend._GEOMETRY_CUDA.SLERP_SMALL_ANGLE_DOT_THRESHOLD
+    _backend._GEOMETRY_HIP.SLERP_SMALL_ANGLE_DOT_THRESHOLD
 )
 
 
@@ -120,7 +120,7 @@ def _quat_blend_t_tensor(q1_flat: Tensor, t: float | Tensor) -> Tensor:
 
 
 def _quat_normalize_safe_eps_dtype(dtype: torch.dtype) -> float:
-    """Match QuatNormEps in cuda/csrc/quaternion.cu."""
+    """Match QuatNormEps in cuda/csrc/quaternion.hip."""
     return 1e-12 if dtype == torch.float64 else 1e-7
 
 
@@ -219,7 +219,7 @@ class QuatNormalizeSafeFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, quat: Tensor) -> Tensor:
         quat = quat.contiguous()
-        result = _backend._GEOMETRY_CUDA.quat_normalize_safe(quat)
+        result = _backend._GEOMETRY_HIP.quat_normalize_safe(quat)
         ctx.save_for_backward(quat)
         return result
 
@@ -228,7 +228,7 @@ class QuatNormalizeSafeFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         (quat,) = ctx.saved_tensors
         grad_result = grad_result.contiguous()
-        grad_quat = _backend._GEOMETRY_CUDA.quat_normalize_safe_bwd(quat, grad_result)
+        grad_quat = _backend._GEOMETRY_HIP.quat_normalize_safe_bwd(quat, grad_result)
         return grad_quat
 
 
@@ -238,7 +238,7 @@ class QuatConjugateFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, quat: Tensor) -> Tensor:
         quat = quat.contiguous()
-        result = _backend._GEOMETRY_CUDA.quat_conjugate(quat)
+        result = _backend._GEOMETRY_HIP.quat_conjugate(quat)
         ctx.save_for_backward(quat)
         return result
 
@@ -247,7 +247,7 @@ class QuatConjugateFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         (quat,) = ctx.saved_tensors
         grad_result = grad_result.contiguous()
-        grad_quat = _backend._GEOMETRY_CUDA.quat_conjugate_bwd(quat, grad_result)
+        grad_quat = _backend._GEOMETRY_HIP.quat_conjugate_bwd(quat, grad_result)
         return grad_quat
 
 
@@ -258,7 +258,7 @@ class QuatMultiplyFunction(torch.autograd.Function):
     def forward(ctx, q1: Tensor, q2: Tensor) -> Tensor:
         q1 = q1.contiguous()
         q2 = q2.contiguous()
-        result = _backend._GEOMETRY_CUDA.quat_multiply(q1, q2)
+        result = _backend._GEOMETRY_HIP.quat_multiply(q1, q2)
         ctx.save_for_backward(q1, q2, result)
         return result
 
@@ -267,7 +267,7 @@ class QuatMultiplyFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         q1, q2, _result = ctx.saved_tensors
         grad_result = grad_result.contiguous()
-        grad_q1, grad_q2 = _backend._GEOMETRY_CUDA.quat_multiply_bwd(
+        grad_q1, grad_q2 = _backend._GEOMETRY_HIP.quat_multiply_bwd(
             q1, q2, grad_result
         )
         return grad_q1, grad_q2
@@ -280,7 +280,7 @@ class QuatRotateVectorFunction(torch.autograd.Function):
     def forward(ctx, quat: Tensor, vec: Tensor) -> Tensor:
         quat = quat.contiguous()
         vec = vec.contiguous()
-        result = _backend._GEOMETRY_CUDA.quat_rotate_vector(quat, vec)
+        result = _backend._GEOMETRY_HIP.quat_rotate_vector(quat, vec)
         ctx.save_for_backward(quat, vec, result)
         return result
 
@@ -289,7 +289,7 @@ class QuatRotateVectorFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         quat, vec, _result = ctx.saved_tensors
         grad_result = grad_result.contiguous()
-        grad_quat, grad_vec = _backend._GEOMETRY_CUDA.quat_rotate_vector_bwd(
+        grad_quat, grad_vec = _backend._GEOMETRY_HIP.quat_rotate_vector_bwd(
             quat, vec, grad_result
         )
         return grad_quat, grad_vec
@@ -302,7 +302,7 @@ class QuatToMatrixFunction(torch.autograd.Function):
     def forward(ctx, quat: Tensor) -> Tensor:
         quat = quat.contiguous()
         count = quat.shape[0]
-        result_flat = _backend._GEOMETRY_CUDA.quat_to_matrix(quat)
+        result_flat = _backend._GEOMETRY_HIP.quat_to_matrix(quat)
         result = result_flat.reshape(count, 3, 3)
         ctx.save_for_backward(quat, result_flat)
         return result
@@ -312,7 +312,7 @@ class QuatToMatrixFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         quat, result_flat = ctx.saved_tensors
         grad_result_flat = grad_result.reshape(result_flat.shape[0], 9).contiguous()
-        grad_quat = _backend._GEOMETRY_CUDA.quat_to_matrix_bwd(quat, grad_result_flat)
+        grad_quat = _backend._GEOMETRY_HIP.quat_to_matrix_bwd(quat, grad_result_flat)
         return grad_quat
 
 
@@ -324,7 +324,7 @@ class QuatSlerpBatchedFunction(torch.autograd.Function):
         q1 = q1.contiguous()
         q2 = q2.contiguous()
         t = t.contiguous()
-        result = _backend._GEOMETRY_CUDA.quat_slerp_batched(q1, q2, t)
+        result = _backend._GEOMETRY_HIP.quat_slerp_batched(q1, q2, t)
         ctx.save_for_backward(q1, q2, t, result)
         return result
 
@@ -333,7 +333,7 @@ class QuatSlerpBatchedFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         q1, q2, t, result = ctx.saved_tensors
         grad_result = grad_result.contiguous()
-        return _backend._GEOMETRY_CUDA.quat_slerp_batched_bwd(
+        return _backend._GEOMETRY_HIP.quat_slerp_batched_bwd(
             q1, q2, t, result, grad_result
         )
 
@@ -345,7 +345,7 @@ class QuatLerpFunction(torch.autograd.Function):
     def forward(ctx, q1: Tensor, q2: Tensor, t: float) -> Tensor:
         q1 = q1.contiguous()
         q2 = q2.contiguous()
-        result = _backend._GEOMETRY_CUDA.quat_lerp(q1, q2, float(t))
+        result = _backend._GEOMETRY_HIP.quat_lerp(q1, q2, float(t))
         ctx.save_for_backward(q1, q2, result)
         ctx.t = t
         return result
@@ -355,7 +355,7 @@ class QuatLerpFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         q1, q2, result = ctx.saved_tensors
         grad_result = grad_result.contiguous()
-        grad_q1, grad_q2 = _backend._GEOMETRY_CUDA.quat_lerp_bwd(
+        grad_q1, grad_q2 = _backend._GEOMETRY_HIP.quat_lerp_bwd(
             q1, q2, result, grad_result, float(ctx.t)
         )
         return grad_q1, grad_q2, None
@@ -368,7 +368,7 @@ class QuatFromAxisAngleFunction(torch.autograd.Function):
     def forward(ctx, axis: Tensor, angle: Tensor) -> Tensor:
         axis = axis.contiguous()
         angle = angle.contiguous()
-        quat = _backend._GEOMETRY_CUDA.quat_from_axis_angle(axis, angle)
+        quat = _backend._GEOMETRY_HIP.quat_from_axis_angle(axis, angle)
         ctx.save_for_backward(axis, angle, quat)
         return quat
 
@@ -377,7 +377,7 @@ class QuatFromAxisAngleFunction(torch.autograd.Function):
         grad_quat = grad_outputs[0]
         axis, angle, quat = ctx.saved_tensors
         grad_quat = grad_quat.contiguous()
-        grad_axis, grad_angle = _backend._GEOMETRY_CUDA.quat_from_axis_angle_bwd(
+        grad_axis, grad_angle = _backend._GEOMETRY_HIP.quat_from_axis_angle_bwd(
             axis, angle, grad_quat
         )
         return grad_axis, grad_angle
@@ -390,7 +390,7 @@ class QuatAngularDistanceFunction(torch.autograd.Function):
     def forward(ctx, q1: Tensor, q2: Tensor) -> Tensor:
         q1 = q1.contiguous()
         q2 = q2.contiguous()
-        distance = _backend._GEOMETRY_CUDA.quat_angular_distance(q1, q2)
+        distance = _backend._GEOMETRY_HIP.quat_angular_distance(q1, q2)
         ctx.save_for_backward(q1, q2)
         return distance.squeeze(-1)
 
@@ -398,7 +398,7 @@ class QuatAngularDistanceFunction(torch.autograd.Function):
     def backward(ctx, *grad_outputs: Any):
         grad_distance = grad_outputs[0].unsqueeze(-1).contiguous()
         q1, q2 = ctx.saved_tensors
-        grad_q1, grad_q2 = _backend._GEOMETRY_CUDA.quat_angular_distance_bwd(
+        grad_q1, grad_q2 = _backend._GEOMETRY_HIP.quat_angular_distance_bwd(
             q1, q2, grad_distance
         )
         return grad_q1, grad_q2
@@ -412,7 +412,7 @@ class QuatManifoldInterpFunction(torch.autograd.Function):
         q1 = q1.contiguous()
         q2 = q2.contiguous()
         t = t.contiguous()
-        result = _backend._GEOMETRY_CUDA.quat_manifold_interp(q1, q2, t)
+        result = _backend._GEOMETRY_HIP.quat_manifold_interp(q1, q2, t)
         ctx.save_for_backward(q1, q2, t)
         return result
 
@@ -421,7 +421,7 @@ class QuatManifoldInterpFunction(torch.autograd.Function):
         grad_result = grad_outputs[0]
         q1, q2, t = ctx.saved_tensors
         grad_result = grad_result.contiguous()
-        grad_q1, grad_q2, grad_t = _backend._GEOMETRY_CUDA.quat_manifold_interp_bwd(
+        grad_q1, grad_q2, grad_t = _backend._GEOMETRY_HIP.quat_manifold_interp_bwd(
             q1, q2, t, grad_result
         )
         return grad_q1, grad_q2, grad_t
