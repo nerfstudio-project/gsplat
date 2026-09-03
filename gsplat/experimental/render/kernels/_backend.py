@@ -81,7 +81,8 @@ def _get_backend():
                 )
         else:
             _warn(
-                "experimental: No CUDA toolkit found. Inference render will be disabled."
+                "experimental: No CUDA or ROCm toolkit found. "
+                "Inference render will be disabled."
             )
 
     if _C is not None and not _inference_op_registered():
