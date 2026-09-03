@@ -18,6 +18,10 @@
 
 #include "Config.h"
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 #if GSPLAT_BUILD_3DGUT
 
 #    include <ATen/Dispatch.h>
@@ -186,7 +190,13 @@ namespace
         {
             return 0;
         }
+#if defined(_MSC_VER)
+        unsigned long leading_zero = 0;
+        _BitScanReverse64(&leading_zero, x - 1);
+        return 64u - static_cast<uint32_t>(leading_zero);
+#else
         return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
+#endif
     }
 } // namespace
 
@@ -1220,3 +1230,16 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
 } // namespace gsplat
 
 #endif
+
+// MSVC: the implicit instantiation of this torch cub detail template is not
+// emitted when this translation unit is compiled with nvcc on Windows; force
+// it here (after the header that defines the template body).
+template void at::cuda::cub::detail::radix_sort_pairs_impl<int64_t, 4>(
+    const int64_t* keys_in,
+    int64_t* keys_out,
+    const at::cuda::cub::detail::OpaqueType<4>* values_in,
+    at::cuda::cub::detail::OpaqueType<4>* values_out,
+    int64_t n,
+    bool descending,
+    int64_t begin_bit,
+    int64_t end_bit);

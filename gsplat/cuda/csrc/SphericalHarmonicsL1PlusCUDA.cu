@@ -24,6 +24,7 @@
 #include <ATen/ops/zeros.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
+#include <cuda/std/array>
 #include <array>
 #include <cooperative_groups.h>
 #include <vector>
@@ -704,7 +705,7 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
         return;
     }
 
-    std::array<opmath_t, MAX_K> acc{};
+    cuda::std::array<opmath_t, MAX_K> acc{};
 
     const scalar_t *coeffs_ptr = coeffs + coeff_id * K * D;
     const uint32_t image_count = packed ? 1 : B * C;

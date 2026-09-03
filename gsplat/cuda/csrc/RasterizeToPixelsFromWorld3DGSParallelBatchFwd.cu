@@ -1527,7 +1527,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     const at::Tensor batch_offsets,    // [num_tiles + 1] int32
     const at::Tensor bid_to_slot,      // [total_batches] int32
     const int64_t total_batches,       // scalar; equals batch_offsets[num_tiles]
-    const bool fwd_only,
+    bool fwd_only,
     // outputs
     at::Tensor renders,                     // [..., C, image_height, image_width, channels]
     at::Tensor alphas,                      // [..., C, image_height, image_width]
@@ -1610,8 +1610,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
                              typename UseHitDistanceT,
                              typename FwdOnlyT>()
     {
-        constexpr uint32_t CDIM       = ChannelsT::value;
-        constexpr bool ReturnNormals  = static_cast<bool>(ReturnNormalsT::value);
+        static constexpr uint32_t CDIM = ChannelsT::value;
+        static constexpr bool ReturnNormals  = static_cast<bool>(ReturnNormalsT::value);
         constexpr bool UseHitDistance = static_cast<bool>(UseHitDistanceT::value);
         constexpr int64_t StateDim
             = FWD_BATCH_STATE_PIX_OFFSET + CDIM + (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0);
@@ -1701,9 +1701,9 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
         //             co-resident CTAs; wins on training)
         //  tile 16 -> CTA 256, 1 px/thread (one thread per pixel; wins on
         //             high-res fwd-only)
-        constexpr uint32_t TILE_SIZE = TileSizeT::value;
-        constexpr uint32_t CTA_SIZE  = CtaSizeForTile<TILE_SIZE>::value;
-        constexpr bool ForBackward   = FwdOnlyT::value == 0;
+        static constexpr uint32_t TILE_SIZE = TileSizeT::value;
+        static constexpr uint32_t CTA_SIZE  = CtaSizeForTile<TILE_SIZE>::value;
+        static constexpr bool ForBackward   = FwdOnlyT::value == 0;
         const dim3 threads           = {CTA_SIZE, 1, 1};
         // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch +
         // scale_batch + normal_batch — CTA_SIZE entries each.

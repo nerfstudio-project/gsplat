@@ -517,7 +517,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
 
     auto launch_kernel = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
+        static constexpr uint32_t CDIM = ChannelsT::value;
 
         if(cudaFuncSetAttribute(
                rasterize_to_pixels_2dgs_fwd_kernel<CDIM, float>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_size

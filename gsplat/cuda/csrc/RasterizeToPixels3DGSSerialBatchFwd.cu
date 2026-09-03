@@ -338,7 +338,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
 
     auto launch_kernel = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
+        static constexpr uint32_t CDIM = ChannelsT::value;
 
         auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
         {
@@ -456,7 +456,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
 
     auto launch_kernels = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
+        static constexpr uint32_t CDIM = ChannelsT::value;
 
         auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
         {
