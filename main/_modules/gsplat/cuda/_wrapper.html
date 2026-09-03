@@ -1722,7 +1722,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple:</span>
 
-<span class="sd">        - **Tile offsets**. Int32 [num_active_tiles + 1]. ``tile_offsets[i]`` is</span>
+<span class="sd">        - **Tile offsets**. Int64 [num_active_tiles + 1]. ``tile_offsets[i]`` is</span>
 <span class="sd">          the exclusive prefix-sum start of the flatten-id range for</span>
 <span class="sd">          ``active_tiles[i]``; the trailing sentinel ``tile_offsets[-1] ==</span>
 <span class="sd">          n_isects``.</span>
@@ -2747,7 +2747,8 @@
 <span class="sd">    kernel raises ``ValueError``.</span>
 
 <span class="sd">    Args:</span>
-<span class="sd">        return_last_ids: If True, also return last flatten_idx per pixel. Default: True.</span>
+<span class="sd">        return_last_ids: If True, also return the last tile-local offset in</span>
+<span class="sd">            ``flatten_ids`` per pixel. Default: True.</span>
 <span class="sd">        return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.</span>
 <span class="sd">        return_normals: If True, compute and return accumulated normals per pixel.</span>
 <span class="sd">            Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)</span>
@@ -2767,7 +2768,8 @@
 
 <span class="sd">        - **Rendered colors**. [..., C, image_height, image_width, channels]</span>
 <span class="sd">        - **Rendered alphas**. [..., C, image_height, image_width, 1]</span>
-<span class="sd">        - **Last flatten_idx** (optional). [..., C, image_height, image_width]. If return_last_ids=True.</span>
+<span class="sd">        - **Last tile-local flatten_ids offset** (optional). [..., C, image_height,</span>
+<span class="sd">          image_width]. If return_last_ids=True.</span>
 <span class="sd">        - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.</span>
 <span class="sd">        - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.</span>
 <span class="sd">    """</span>
