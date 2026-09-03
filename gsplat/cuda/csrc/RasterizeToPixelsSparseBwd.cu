@@ -66,7 +66,7 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
     const uint32_t tile_height,
     // sparse layout
     const int32_t *__restrict__ active_tiles,      // [AT]
-    const int32_t *__restrict__ tile_offsets,      // [AT + 1]
+    const int64_t *__restrict__ tile_offsets,      // [AT + 1]
     const int32_t *__restrict__ flatten_ids,       // [n_isects]
     const uint64_t *__restrict__ tile_pixel_mask,  // [AT, words]
     const int64_t *__restrict__ tile_pixel_cumsum, // [AT], inclusive
@@ -116,10 +116,11 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
     const int64_t out_idx           = sparse_pixel_slot(tile_mask_words, in_tile, pix_start, pixel_map);
     const bool inside               = out_idx >= 0;
 
-    const int32_t range_start  = tile_offsets[ord];
-    const int32_t range_end    = tile_offsets[ord + 1];
-    const uint32_t block_size  = block.size();
-    const uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
+    const int64_t range_start       = tile_offsets[ord];
+    const int64_t range_end         = tile_offsets[ord + 1];
+    const uint32_t block_size       = block.size();
+    const int64_t num_intersections = range_end - range_start;
+    const int64_t num_batches       = (num_intersections + block_size - 1) / block_size;
 
     extern __shared__ int s[];
     int32_t *id_batch      = (int32_t *)s;
@@ -147,15 +148,16 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
     const uint32_t tr              = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
     const int32_t warp_bin_final   = cg::reduce(warp, bin_final, cg::greater<int>());
-    for(uint32_t b = 0; b < num_batches; ++b)
+    for(int64_t b = 0; b < num_batches; ++b)
     {
         // resync all threads before writing next batch of shared mem
         block.sync();
 
         // each thread fetch 1 gaussian from back to front
-        const int32_t batch_end  = range_end - 1 - block_size * b;
-        const int32_t batch_size = min((int32_t)block_size, batch_end + 1 - range_start);
-        const int32_t idx        = batch_end - tr;
+        const int64_t batch_end_offset = num_intersections - 1 - block_size * b;
+        const int64_t remaining        = batch_end_offset + 1;
+        const uint32_t batch_size      = static_cast<uint32_t>(remaining < block_size ? remaining : block_size);
+        const int64_t idx              = range_start + batch_end_offset - tr;
         if(idx >= range_start)
         {
             int32_t g            = flatten_ids[idx];
@@ -174,10 +176,12 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
         block.sync();
 
         // process gaussians in the current batch for this pixel, back to front
-        for(uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t)
+        const int64_t first_t64 = batch_end_offset > warp_bin_final ? batch_end_offset - warp_bin_final : 0;
+        const uint32_t first_t  = first_t64 < batch_size ? static_cast<uint32_t>(first_t64) : batch_size;
+        for(uint32_t t = first_t; t < batch_size; ++t)
         {
             bool valid = inside;
-            if(batch_end - t > bin_final)
+            if(batch_end_offset - t > bin_final)
             {
                 valid = 0;
             }
@@ -311,8 +315,8 @@ void launch_rasterize_to_pixels_sparse_bwd_kernel(
     at::Tensor v_opacities                  // [..., N] or [nnz]
 )
 {
-    const uint32_t AT       = active_tiles.size(0);
-    const uint32_t n_isects = flatten_ids.size(0);
+    const uint32_t AT      = active_tiles.size(0);
+    const int64_t n_isects = flatten_ids.size(0);
     if(AT == 0 || n_isects == 0)
     {
         return; // nothing to scatter into the (already zeroed) grad buffers
@@ -361,7 +365,7 @@ void launch_rasterize_to_pixels_sparse_bwd_kernel(
             tile_width,
             tile_height,
             active_tiles.const_data_ptr<int32_t>(),
-            tile_offsets.const_data_ptr<int32_t>(),
+            tile_offsets.const_data_ptr<int64_t>(),
             flatten_ids.const_data_ptr<int32_t>(),
             tile_pixel_mask.const_data_ptr<uint64_t>(),
             tile_pixel_cumsum.const_data_ptr<int64_t>(),

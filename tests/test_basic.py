@@ -1303,6 +1303,7 @@ def test_isect(test_data, dtype: torch.dtype, batch_dims: Tuple[int, ...]):
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+    assert isect_offsets.dtype == torch.int64
 
     _tiles_per_gauss, _isect_ids, _gauss_ids = _isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
@@ -3892,10 +3893,10 @@ def test_rasterize_to_pixels_eval3d(
     assert not (count_match & vis_mismatch).any()
     assert not (count_mismatch & count_match).any()
 
-    # On count-matched pixels, the last contributing gaussian's flatten_idx
-    # must match exactly. An off-by-one, such as over-counting the saturating
-    # gaussian past TRANSMITTANCE_THRESHOLD, can shift last_ids by 1 while
-    # sample_counts still coincidentally match.
+    # On count-matched pixels, the last contributing gaussian's tile-local
+    # flatten_ids offset must match exactly. An off-by-one, such as
+    # over-counting the saturating gaussian past TRANSMITTANCE_THRESHOLD, can
+    # shift last_ids by 1 while sample_counts still coincidentally match.
     last_ids_match = render_last_ids[count_match] == _render_last_ids[count_match]
     assert last_ids_match.all(), (
         f"last_ids diverge on {(~last_ids_match).sum().item()} of "
@@ -4381,7 +4382,7 @@ def test_eval3d_masked_tile_writes_safe_defaults(tile_size, renderer_config):
         ],
         device=device,
     )
-    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int64, device=device)
     flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
 
     public_render_colors, public_render_alphas = gsplat.rasterize_to_pixels_eval3d(
@@ -7807,7 +7808,7 @@ def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized(packed: bool, 
         else backgrounds_batched.clone()
     ).requires_grad_()
     masks = torch.zeros((I, 1, 1), dtype=torch.bool, device=device)  # tiles masked off
-    isect_offsets = torch.zeros((I, 1, 1), dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros((I, 1, 1), dtype=torch.int64, device=device)
     flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
 
     (
@@ -8161,7 +8162,7 @@ def test_rasterize_to_indices_in_range_empty():
     conics = torch.zeros(C, 0, 3, device=device)
     opacities = torch.zeros(C, 0, device=device)
     transmittances = torch.ones(C, H, W, device=device)
-    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int64, device=device)
     flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
 
     gauss_ids, pixel_ids, image_ids = rasterize_to_indices_in_range(
@@ -8205,7 +8206,7 @@ def test_rasterize_to_pixels_eval3d_empty():
         [[[float(W), 0.0, W / 2.0], [0.0, float(H), H / 2.0], [0.0, 0.0, 1.0]]],
         device=device,
     )
-    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int64, device=device)
     flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
 
     # Must not crash (pre-fix: host-side division by zero on the empty input),

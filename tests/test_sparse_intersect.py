@@ -75,7 +75,7 @@ def _check(means2d, radii, depths, mask, active, C, ts, tw, th, image_ids=None):
     r_off, r_ids = _isect_tiles_sparse(
         means2d, radii, depths, mask, active, C, ts, tw, th, image_ids=image_ids
     )
-    assert g_off.dtype == torch.int32 and g_ids.dtype == torch.int32
+    assert g_off.dtype == torch.int64 and g_ids.dtype == torch.int32
     assert g_off.shape == (active.numel() + 1,)
     torch.testing.assert_close(g_off, r_off, rtol=0, atol=0)
     torch.testing.assert_close(g_ids, r_ids, rtol=0, atol=0)
