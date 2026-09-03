@@ -101,6 +101,31 @@ def _camera_distortion(camera: Any) -> tuple[np.ndarray, str]:
         return np.array(params[4:8], dtype=np.float32), "perspective"
     if model_name == "OPENCV_FISHEYE":
         return np.array(params[4:8], dtype=np.float32), "fisheye"
+    if model_name == "SIMPLE_RADIAL_FISHEYE":
+        # params: f, cx, cy, k. Equidistant fisheye with a single radial term;
+        # identical to OPENCV_FISHEYE with k2 = k3 = k4 = 0.
+        return np.array([params[3], 0.0, 0.0, 0.0], dtype=np.float32), "fisheye"
+    if model_name == "RADIAL_FISHEYE":
+        # params: f, cx, cy, k1, k2. Equidistant fisheye with two radial terms;
+        # identical to OPENCV_FISHEYE with k3 = k4 = 0.
+        return np.array([params[3], params[4], 0.0, 0.0], dtype=np.float32), "fisheye"
+    if model_name == "FULL_OPENCV":
+        # params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+        # This loader undistorts with the [k1, k2, p1, p2, k3] coefficients
+        # only. OpenCV can represent the full rational model (an 8-element
+        # [k1, k2, p1, p2, k3, k4, k5, k6] vector), but that is not wired
+        # through here, so refuse cameras whose rational terms k4, k5, k6 are
+        # non-zero rather than silently dropping their distortion. Raise (not
+        # assert) so the check is not stripped under `python -O`.
+        k4, k5, k6 = float(params[9]), float(params[10]), float(params[11])
+        if not np.allclose((k4, k5, k6), 0.0):
+            raise ValueError(
+                "FULL_OPENCV camera has non-zero rational distortion terms "
+                f"(k4={k4}, k5={k5}, k6={k6}); only coefficients up to k3 are "
+                "supported by this loader."
+            )
+        # keep k1, k2, p1, p2, k3 (OpenCV accepts a 5-element distortion vector)
+        return np.array(params[4:9], dtype=np.float32), "perspective"
 
     raise ValueError(
         f"Only perspective and fisheye cameras are supported, got {model_name}"
@@ -407,8 +432,12 @@ class Parser:
                     + params[2] * theta**6
                     + params[3] * theta**8
                 )
-                mapx = (fx * x1 * r + width // 2).astype(np.float32)
-                mapy = (fy * y1 * r + height // 2).astype(np.float32)
+                # Re-center on the principal point (cx, cy), not the image
+                # center: with zero distortion (r == 1) this is the identity
+                # map, and it keeps the undistorted image consistent with the
+                # K_undist used at render time when cx/cy are off-center.
+                mapx = (fx * x1 * r + cx).astype(np.float32)
+                mapy = (fy * y1 * r + cy).astype(np.float32)
 
                 # Use mask to define ROI
                 mask = np.logical_and(
