@@ -46,6 +46,45 @@ def test_mcmc_strategy_positional_constructor():
     assert strategy.noise_opacity_k == 30.0
 
 
+def test_default_strategy_accumulates_batched_observations_by_gaussian():
+    from gsplat.strategy import DefaultStrategy
+
+    n_gaussians = 3
+    means2d = torch.zeros(2, 2, n_gaussians, 2, requires_grad=True)
+    gradients = torch.zeros_like(means2d)
+    radii = torch.zeros(2, 2, n_gaussians, 2)
+
+    visible_observations = [
+        (0, 0, 0, 1.0),
+        (0, 1, 1, 2.0),
+        (1, 0, 2, 3.0),
+        (1, 1, 0, 4.0),
+    ]
+    for batch, camera, gaussian, gradient in visible_observations:
+        gradients[batch, camera, gaussian, 0] = gradient
+        radii[batch, camera, gaussian] = 1.0
+    means2d.grad = gradients
+
+    strategy = DefaultStrategy()
+    state = strategy.initialize_state()
+    strategy._update_state(
+        params={"means": torch.empty(n_gaussians, 3)},
+        state=state,
+        info={
+            "width": 2,
+            "height": 2,
+            "n_cameras": 2,
+            "radii": radii,
+            "gaussian_ids": None,
+            "means2d": means2d,
+        },
+        packed=False,
+    )
+
+    torch.testing.assert_close(state["count"], torch.tensor([2.0, 1.0, 1.0]))
+    torch.testing.assert_close(state["grad2d"], torch.tensor([10.0, 4.0, 6.0]))
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy():
