@@ -779,7 +779,11 @@ struct OrthographicCameraModel
         }
 
         const auto point = glm::fvec2{ray.x, ray.y} / ray.z;
-        if(!std::isfinite(point.x) || !std::isfinite(point.y))
+        // ::isfinite, not std::isfinite: MSVC's <cmath> only declares the std
+        // overloads as host functions, so nvcc rejects them in device code
+        // ("calling a __host__ function from a __device__ function"). The
+        // global-namespace form resolves to CUDA's device overload.
+        if(!::isfinite(point.x) || !::isfinite(point.y))
         {
             return {
                 glm::fvec2{0.f, 0.f},

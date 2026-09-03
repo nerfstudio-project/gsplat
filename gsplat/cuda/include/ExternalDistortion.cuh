@@ -29,6 +29,8 @@
 
 namespace gsplat::extdist
 {
+struct BivariateWindshieldModelDeviceParams;
+
 constexpr int32_t compute_order(int32_t num_coeffs)
 {
     // MAX_ORDER is so small we can just avoid math and use

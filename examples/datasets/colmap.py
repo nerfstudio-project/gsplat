@@ -127,6 +127,7 @@ class Parser:
         normalize: bool = False,
         test_every: int = 8,
         load_exposure: bool = False,
+        native_images_factor: bool = False,
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -231,7 +232,11 @@ class Parser:
         # so we need to map between the two sorted lists of files.
         colmap_files = sorted(_get_rel_paths(colmap_image_dir))
         image_files = sorted(_get_rel_paths(image_dir))
-        if factor > 1 and os.path.splitext(image_files[0])[1].lower() == ".jpg":
+        if (
+            factor > 1
+            and not native_images_factor
+            and os.path.splitext(image_files[0])[1].lower() == ".jpg"
+        ):
             image_dir = _resize_image_folder(
                 colmap_image_dir, image_dir + "_png", factor=factor
             )

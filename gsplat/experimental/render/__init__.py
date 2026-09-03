@@ -18,6 +18,7 @@ __all__ = [
     "GaussianInferenceRenderer",
     "RenderReturn",
     "rasterize_gaussian_inference_scene",
+    "rasterize_gaussian_nht_scene",
     "render_scene",
 ]
 
@@ -35,6 +36,10 @@ def __getattr__(name):
         from .functional.gaussian_inference import rasterize_gaussian_inference_scene
 
         return rasterize_gaussian_inference_scene
+    if name == "rasterize_gaussian_nht_scene":
+        from .functional.gaussian_nht import rasterize_gaussian_nht_scene
+
+        return rasterize_gaussian_nht_scene
     if name == "render_scene":
         from .functional.render_scene import render_scene
 

@@ -76,6 +76,7 @@ BUILD_2DGS = os.getenv("BUILD_2DGS")
 BUILD_ADAM = os.getenv("BUILD_ADAM")
 BUILD_RELOC = os.getenv("BUILD_RELOC")
 BUILD_LOSSES = os.getenv("BUILD_LOSSES")
+BUILD_NHT = os.getenv("BUILD_NHT")
 BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
 
 NUM_CHANNELS = os.getenv("NUM_CHANNELS")
@@ -129,13 +130,24 @@ def get_build_parameters():
     extra_ldflags = []
 
     if sys.platform == "win32":
-        extra_cflags += ["/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN"]
+        # /bigobj: some translation units (e.g. the ParallelBatch rasterizers,
+        # which instantiate ~200+ kernel template variants each) push the COFF
+        # object's section count high enough that MSVC's linker can silently
+        # fail to resolve their symbols without this flag.
+        extra_cflags += [
+            "/std:c++20",
+            "/Zc:preprocessor",
+            "-DWIN32_LEAN_AND_MEAN",
+            "/bigobj",
+        ]
         extra_cuda_cflags += [
             "-std=c++20",
             "-allow-unsupported-compiler",
             "-Xcompiler",
             "/Zc:preprocessor",
             "-DWIN32_LEAN_AND_MEAN",
+            "-Xcompiler",
+            "/bigobj",
         ]
     else:
         extra_cflags = ["-std=c++20"]
@@ -211,6 +223,10 @@ def get_build_parameters():
         extra_cflags += [f"-DGSPLAT_BUILD_LOSSES={BUILD_LOSSES}"]
         if sys.platform == "win32":
             extra_cuda_cflags += [f"-DGSPLAT_BUILD_LOSSES={BUILD_LOSSES}"]
+    if BUILD_NHT is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_NHT={BUILD_NHT}"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += [f"-DGSPLAT_BUILD_NHT={BUILD_NHT}"]
     if BUILD_CAMERA_WRAPPERS:
         extra_cflags += ["-DGSPLAT_BUILD_CAMERA_WRAPPERS=1"]
         if sys.platform == "win32":
@@ -220,6 +236,17 @@ def get_build_parameters():
         sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
 
     extra_ldflags += [] if WITH_SYMBOLS or sys.platform == "win32" else ["-s"]
+
+    if sys.platform == "win32":
+        # setuptools' bundled _msvccompiler.py hardcodes /LTCG (link-time
+        # code generation / whole-program optimization) for every Windows
+        # Release link. With ~47 translation units — a couple instantiating
+        # ~200+ kernel template variants each — this has been observed to
+        # silently drop exported symbols from the largest objects (LNK2001
+        # at link time despite the symbol being present and External in the
+        # object file when compiled/linked standalone without LTCG).
+        # Appended after setuptools' own ldflags, so this overrides it.
+        extra_ldflags += ["/LTCG:OFF"]
 
     if WITH_SYMBOLS:
         extra_cuda_cflags += ["-lineinfo"]
