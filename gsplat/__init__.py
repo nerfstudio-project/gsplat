@@ -64,6 +64,7 @@ from .cuda._wrapper import (
 from .exporter import export_splats
 from .optimizers import SelectiveAdam
 from .rendering import (
+    LidarReturnMode,
     RasterizeMode,
     RendererConfig,
     RendererConfig_MixedBatch,
@@ -113,6 +114,7 @@ __all__ = [
     "CameraModel",
     "ExternalDistortionModelMeta",
     "ExternalDistortionModelParameters",
+    "LidarReturnMode",
     "RasterizeMode",
     "RendererConfig",
     "RendererConfig_MixedBatch",
