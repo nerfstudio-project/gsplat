@@ -92,6 +92,18 @@ def _multinomial_sample(weights: Tensor, n: int, replacement: bool = True) -> Te
         return sampled_idxs.to(weights.device)
 
 
+def _ensure_live_gaussians(
+    opacities: Tensor, min_opacity: float, operation: str
+) -> None:
+    if not torch.any(opacities > min_opacity).item():
+        raise RuntimeError(
+            f"MCMC {operation} cannot continue because there are no live Gaussians "
+            f"with opacity above min_opacity={min_opacity}. Restore a checkpoint "
+            "with live Gaussians, or lower min_opacity or the opacity "
+            "regularization strength."
+        )
+
+
 @torch.no_grad()
 def _update_param_with_optimizer(
     param_fn: Callable[[str, Tensor], Tensor],
@@ -323,6 +335,8 @@ def relocate(
     n = len(dead_indices)
 
     # Sample for new GSs
+    if n > 0:
+        _ensure_live_gaussians(opacities[alive_indices], min_opacity, "relocation")
     probs = opacities[alive_indices].flatten()  # ensure its shape is [N,]
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     sampled_idxs = alive_indices[sampled_idxs]
@@ -368,6 +382,8 @@ def sample_add(
 ):
     opacities = torch.sigmoid(params["opacities"])
 
+    if n > 0:
+        _ensure_live_gaussians(opacities, min_opacity, "growth")
     probs = opacities.flatten()
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     new_opacities, new_scales = compute_relocation(
