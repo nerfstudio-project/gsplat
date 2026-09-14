@@ -458,6 +458,7 @@ __global__ void spherical_harmonics_fwd_kernel(
     const int64_t *__restrict__ batch_ids,
     const int64_t *__restrict__ camera_ids,
     const int64_t *__restrict__ gaussian_ids,
+    const int64_t packed_coeff_batch_stride,
     opmath_t *__restrict__ colors // [..., N, D]
 )
 {
@@ -475,8 +476,10 @@ __global__ void spherical_harmonics_fwd_kernel(
     const int64_t batch_id  = packed ? batch_ids[output_id] : image_id / C;
     const int64_t camera_id = packed ? camera_ids[output_id] : image_id % C;
     const int64_t gaussian_id = packed ? gaussian_ids[output_id] : local_elem_id % gaussian_count + gaussian_offset;
-    const int64_t coeff_id    = packed ? output_id : gaussian_id;
-    const uint32_t c          = idx % D; // output channel
+    const int64_t coeff_id
+        = packed ? (packed_coeff_batch_stride < 0 ? output_id : batch_id * packed_coeff_batch_stride + gaussian_id)
+                 : gaussian_id;
+    const uint32_t c = idx % D; // output channel
     if(masks != nullptr && !masks[output_id])
     {
         return;
@@ -505,6 +508,7 @@ __global__ void __launch_bounds__(256, 4) spherical_harmonics_fwd_kernel_k16_3ch
     const int64_t *__restrict__ batch_ids,
     const int64_t *__restrict__ camera_ids,
     const int64_t *__restrict__ gaussian_ids,
+    const int64_t packed_coeff_batch_stride,
     opmath_t *__restrict__ colors // [..., N, 3]
 )
 {
@@ -519,12 +523,15 @@ __global__ void __launch_bounds__(256, 4) spherical_harmonics_fwd_kernel_k16_3ch
         return;
     }
 
-    const uint32_t image_id     = packed ? 0 : idx / N;
-    const uint32_t batch_id     = packed ? batch_ids[idx] : image_id / C;
-    const uint32_t camera_id    = packed ? camera_ids[idx] : image_id % C;
-    const uint32_t gaussian_id  = packed ? gaussian_ids[idx] : idx % N;
-    const uint32_t coeff_id     = packed ? idx : gaussian_id;
-    coeffs                     += coeff_id * 16 * 3;
+    const uint32_t image_id    = packed ? 0 : idx / N;
+    const uint32_t batch_id    = packed ? batch_ids[idx] : image_id / C;
+    const uint32_t camera_id   = packed ? camera_ids[idx] : image_id % C;
+    const uint32_t gaussian_id = packed ? gaussian_ids[idx] : idx % N;
+    const int64_t coeff_id  = packed ? (packed_coeff_batch_stride < 0
+                                            ? static_cast<int64_t>(idx)
+                                            : static_cast<int64_t>(batch_id) * packed_coeff_batch_stride + gaussian_id)
+                                     : gaussian_id;
+    coeffs                 += coeff_id * 16 * 3;
 
     constexpr bool COEFFS_FP32 = std::is_same_v<scalar_t, float>;
 
@@ -579,6 +586,7 @@ void launch_spherical_harmonics_fwd_kernel(
     const at::optional<at::Tensor> batch_ids,
     const at::optional<at::Tensor> camera_ids,
     const at::optional<at::Tensor> gaussian_ids,
+    const int64_t packed_coeff_batch_stride,
     // outputs
     at::Tensor colors // [..., N, D]
 )
@@ -588,7 +596,7 @@ void launch_spherical_harmonics_fwd_kernel(
     const uint32_t N = means.size(-2);
     const uint32_t C = viewmats.size(-3);
     const uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2));
-    const uint32_t E = batch_ids.has_value() ? coeffs.size(0) : B * C * N;
+    const uint32_t E = batch_ids.has_value() ? batch_ids.value().numel() : B * C * N;
 
     if(E == 0)
     {
@@ -654,6 +662,7 @@ void launch_spherical_harmonics_fwd_kernel(
                     batch_ids.has_value() ? batch_ids.value().const_data_ptr<int64_t>() : nullptr,
                     camera_ids.has_value() ? camera_ids.value().const_data_ptr<int64_t>() : nullptr,
                     gaussian_ids.has_value() ? gaussian_ids.value().const_data_ptr<int64_t>() : nullptr,
+                    packed_coeff_batch_stride,
                     colors_ptr
                 );
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -697,6 +706,7 @@ void launch_spherical_harmonics_fwd_kernel(
                         batch_ids.has_value() ? batch_ids.value().const_data_ptr<int64_t>() : nullptr,
                         camera_ids.has_value() ? camera_ids.value().const_data_ptr<int64_t>() : nullptr,
                         gaussian_ids.has_value() ? gaussian_ids.value().const_data_ptr<int64_t>() : nullptr,
+                        packed_coeff_batch_stride,
                         colors_ptr
                     );
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -769,6 +779,7 @@ void launch_spherical_harmonics_fwd_kernels(
                             nullptr,
                             nullptr,
                             nullptr,
+                            -1,
                             colors_ptr
                         );
                         C10_CUDA_KERNEL_LAUNCH_CHECK();

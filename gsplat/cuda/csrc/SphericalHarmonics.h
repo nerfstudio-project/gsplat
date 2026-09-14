@@ -44,17 +44,32 @@ at::Tensor spherical_harmonics(
     const at::optional<at::Tensor> &viewmats_rs = c10::nullopt
 );
 
+// Forward-only packed SH evaluation from shared [N, K, D] or per-batch
+// [..., N, K, D] coefficients without materializing [nnz, K, D].
+at::Tensor spherical_harmonics_packed_direct(
+    int64_t degrees_to_use,
+    const at::Tensor &means,
+    const at::Tensor &viewmats,
+    const at::Tensor &coeffs,
+    const at::Tensor &masks,
+    const at::Tensor &batch_ids,
+    const at::Tensor &camera_ids,
+    const at::Tensor &gaussian_ids,
+    const at::optional<at::Tensor> &viewmats_rs
+);
+
 void launch_spherical_harmonics_fwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
     const at::Tensor means,
     const at::Tensor viewmats,
     const at::optional<at::Tensor> viewmats_rs,
-    const at::Tensor coeffs,              // [N, K, D]
+    const at::Tensor coeffs,              // [N, K, D] or [..., N, K, D] (direct packed mode)
     const at::optional<at::Tensor> masks, // [..., N]
     const at::optional<at::Tensor> batch_ids,
     const at::optional<at::Tensor> camera_ids,
     const at::optional<at::Tensor> gaussian_ids,
+    int64_t packed_coeff_batch_stride, // <0 gathered [nnz,K,D]; 0 shared [N,K,D]; N per-batch [...,N,K,D]
     // outputs
     at::Tensor colors // [..., N, D]
 );

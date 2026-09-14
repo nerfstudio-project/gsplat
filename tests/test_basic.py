@@ -5427,6 +5427,7 @@ def _make_cpp_classic_rasterization_scene(
     use_color_sh: bool = False,
     use_extra_signals: bool = False,
     use_extra_sh: bool = False,
+    per_batch_sh: bool = False,
 ):
     shape = batch_dims + (n_gaussians,)
 
@@ -5449,7 +5450,8 @@ def _make_cpp_classic_rasterization_scene(
     Ks[..., 1, 2] = 20.0
 
     if use_color_sh:
-        colors = torch.rand(n_gaussians, 4, 3, device=device) * 0.4
+        sh_shape = shape if per_batch_sh else (n_gaussians,)
+        colors = torch.rand(*sh_shape, 4, 3, device=device) * 0.4
         sh_degree = 1
     else:
         colors = torch.rand(*shape, n_channels, device=device)
@@ -5459,7 +5461,8 @@ def _make_cpp_classic_rasterization_scene(
     extra_signals_sh_degree = None
     if use_extra_signals:
         if use_extra_sh:
-            extra_signals = torch.rand(n_gaussians, 4, 3, device=device) * 0.25
+            sh_shape = shape if per_batch_sh else (n_gaussians,)
+            extra_signals = torch.rand(*sh_shape, 4, 3, device=device) * 0.25
             extra_signals_sh_degree = 1
         else:
             extra_signals = torch.rand(*shape, 2, device=device)
@@ -5558,6 +5561,52 @@ def test_rasterization_cpp_classic_matches_python_reference(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize(
+    "packed,per_batch_sh",
+    [(True, False), (False, False), (True, True)],
+    ids=["rgb-packed", "rgb-dense", "per_batch_sh-packed"],
+)
+def test_rasterization_multi_scene_matches_single_scene(
+    packed: bool, per_batch_sh: bool
+):
+    """Scene b rendered in a (B, C) batch must equal scene b rendered alone."""
+    torch.manual_seed(7)
+    scene = _make_cpp_classic_rasterization_scene(
+        batch_dims=(2,), use_color_sh=per_batch_sh, per_batch_sh=per_batch_sh
+    )
+    n_batches, n_cameras = scene["viewmats"].shape[:2]
+    scene["backgrounds"] = torch.rand(n_batches, n_cameras, 3, device=device)
+
+    batched_colors, batched_alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        packed=packed,
+    )
+    assert batched_colors.shape[:2] == (n_batches, n_cameras)
+
+    for batch_id in range(n_batches):
+        single = _scene_at_batch(scene, batch_id, n_batches)
+        single_colors, single_alphas, _ = gsplat.rasterization(
+            **single,
+            width=48,
+            height=40,
+            tile_size=16,
+            render_mode="RGB",
+            packed=packed,
+        )
+        torch.testing.assert_close(
+            batched_colors[batch_id], single_colors, rtol=0, atol=0
+        )
+        torch.testing.assert_close(
+            batched_alphas[batch_id], single_alphas, rtol=0, atol=0
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_cpp_classic_absgrad_is_optional():
     torch.manual_seed(13)
     scene = _make_cpp_classic_rasterization_scene()
@@ -5609,6 +5658,26 @@ def _clone_rasterization_scene(scene: dict) -> dict:
     return {
         key: value.detach().clone() if isinstance(value, torch.Tensor) else value
         for key, value in scene.items()
+    }
+
+
+def _scene_at_batch(scene: dict, batch_id: int, batch_size: int) -> dict:
+    """Slice a batched scene dict to one batch element, leaving scalars intact."""
+    shared_sh = {
+        name
+        for name, degree in (
+            ("colors", "sh_degree"),
+            ("extra_signals", "extra_signals_sh_degree"),
+        )
+        if scene.get(degree) is not None and scene[name].ndim == 3
+    }
+    return {
+        name: value[batch_id]
+        if isinstance(value, torch.Tensor)
+        and value.shape[:1] == (batch_size,)
+        and name not in shared_sh
+        else value
+        for name, value in scene.items()
     }
 
 
@@ -5754,6 +5823,270 @@ def test_rasterization_cpp_classic_sh_backward_matches_python_reference(packed: 
     for name, actual, expected in zip(grad_names, public_grads, ref_grads):
         assert expected.abs().sum() > 0, f"{name}: reference gradient is zero"
         _assert_public_rasterization_grad_close(actual, expected, name=name)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterization_packed_per_batch_extra_sh_no_grad_matches_serial():
+    torch.manual_seed(21)
+    scene: dict = _make_cpp_classic_rasterization_scene(
+        batch_dims=(2,),
+        n_gaussians=32,
+        use_extra_signals=True,
+        use_extra_sh=True,
+        per_batch_sh=True,
+    )
+    scene["colors"] = None
+    scene["extra_signals"] = torch.randn(2, 32, 4, 5, device=device)
+    kwargs = {
+        "width": 32,
+        "height": 32,
+        "tile_size": 16,
+        "render_mode": "ED",
+        "rasterize_mode": "classic",
+        "packed": True,
+    }
+
+    with torch.no_grad():
+        batched_colors, batched_alphas, batched_meta = gsplat.rasterization(
+            **scene, **kwargs
+        )
+
+    for batch_id in range(2):
+        serial_scene = _scene_at_batch(scene, batch_id, 2)
+        with torch.enable_grad():
+            serial_colors, serial_alphas, serial_meta = gsplat.rasterization(
+                **serial_scene, **kwargs
+            )
+        torch.testing.assert_close(
+            batched_colors[batch_id], serial_colors, rtol=0, atol=0
+        )
+        torch.testing.assert_close(
+            batched_alphas[batch_id], serial_alphas, rtol=0, atol=0
+        )
+        torch.testing.assert_close(
+            batched_meta["render_extra_signals"][batch_id],
+            serial_meta["render_extra_signals"],
+            rtol=0,
+            atol=0,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("packed", [False, True], ids=["dense", "packed"])
+def test_rasterization_shared_sh_matches_serial(packed: bool):
+    torch.manual_seed(22)
+    scene = _make_cpp_classic_rasterization_scene(
+        batch_dims=(2,), n_gaussians=2, use_color_sh=True
+    )
+    kwargs = {
+        "width": 32,
+        "height": 32,
+        "tile_size": 16,
+        "render_mode": "RGB",
+        "rasterize_mode": "classic",
+        "packed": packed,
+    }
+
+    batched_colors, batched_alphas, _ = gsplat.rasterization(**scene, **kwargs)
+
+    for batch_id in range(2):
+        serial_scene = _scene_at_batch(scene, batch_id, 2)
+        serial_colors, serial_alphas, _ = gsplat.rasterization(**serial_scene, **kwargs)
+        torch.testing.assert_close(
+            batched_colors[batch_id], serial_colors, rtol=0, atol=0
+        )
+        torch.testing.assert_close(
+            batched_alphas[batch_id], serial_alphas, rtol=0, atol=0
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("n_cameras", [1, 2], ids=["c1", "c2"])
+def test_rasterization_packed_per_batch_sh_gradient_matches_serial(n_cameras: int):
+    torch.manual_seed(23)
+    scene: dict = _make_cpp_classic_rasterization_scene(
+        batch_dims=(2, 2),
+        n_gaussians=32,
+        n_cameras=n_cameras,
+        use_color_sh=True,
+        use_extra_signals=True,
+        use_extra_sh=True,
+        per_batch_sh=True,
+    )
+    grad_names = ("means", "quats", "scales", "viewmats", "colors", "extra_signals")
+    _set_rasterization_scene_requires_grad(scene, grad_names)
+    kwargs = {
+        "width": 32,
+        "height": 32,
+        "tile_size": 16,
+        "render_mode": "RGB",
+        "rasterize_mode": "classic",
+        "packed": True,
+    }
+
+    batched_colors, _, batched_meta = gsplat.rasterization(**scene, **kwargs)
+    batched_gradients = torch.autograd.grad(
+        batched_colors.sum() + batched_meta["render_extra_signals"].sum(),
+        tuple(scene[name] for name in grad_names),
+    )
+
+    serial_gradients = []
+    for batch_id in range(2):
+        outer_scene = _scene_at_batch(scene, batch_id, 2)
+        for inner_batch_id in range(2):
+            serial_scene = _clone_rasterization_scene(
+                _scene_at_batch(outer_scene, inner_batch_id, 2)
+            )
+            _set_rasterization_scene_requires_grad(serial_scene, grad_names)
+            serial_colors, _, serial_meta = gsplat.rasterization(
+                **serial_scene, **kwargs
+            )
+            serial_gradients.append(
+                torch.autograd.grad(
+                    serial_colors.sum() + serial_meta["render_extra_signals"].sum(),
+                    tuple(serial_scene[name] for name in grad_names),
+                )
+            )
+
+    for name, batched_gradient, serial_gradient in zip(
+        grad_names, batched_gradients, zip(*serial_gradients)
+    ):
+        expected = torch.stack(serial_gradient).reshape_as(batched_gradient)
+        assert expected.abs().sum() > 0, f"{name}: serial gradient is zero"
+        _assert_public_rasterization_grad_close(
+            batched_gradient, expected, name=name, rtol=1e-4, atol=1e-4
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("signal", ["colors", "extra_signals"])
+def test_rasterization_dense_rejects_per_batch_sh(signal: str):
+    torch.manual_seed(24)
+    use_extra_sh = signal == "extra_signals"
+    scene = _make_cpp_classic_rasterization_scene(
+        batch_dims=(2,),
+        n_gaussians=32,
+        use_color_sh=not use_extra_sh,
+        use_extra_signals=use_extra_sh,
+        use_extra_sh=use_extra_sh,
+        per_batch_sh=True,
+    )
+
+    with pytest.raises(
+        RuntimeError, match=f"Per-batch SH {signal} require packed=True"
+    ):
+        gsplat.rasterization(
+            **scene,
+            width=32,
+            height=32,
+            tile_size=16,
+            render_mode="RGB",
+            rasterize_mode="classic",
+            packed=False,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("batch_size", [1, 2], ids=["b1", "b2"])
+@pytest.mark.parametrize("per_batch_sh", [False, True], ids=["shared", "per_batch"])
+@pytest.mark.parametrize("num_bases", [4, 16], ids=["k4", "k16"])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32], ids=["fp16", "fp32"])
+def test_rasterization_packed_sh_no_grad_avoids_coeff_gather(
+    batch_size: int,
+    per_batch_sh: bool,
+    num_bases: int,
+    dtype: torch.dtype,
+):
+    torch.manual_seed(25)
+    scene = _make_cpp_classic_rasterization_scene(
+        batch_dims=(batch_size,),
+        n_gaussians=32,
+        use_color_sh=True,
+        per_batch_sh=per_batch_sh,
+    )
+    sh_shape = (batch_size, 32) if per_batch_sh else (32,)
+    scene["colors"] = torch.rand(*sh_shape, num_bases, 3, device=device, dtype=dtype)
+    kwargs = {
+        "width": 32,
+        "height": 32,
+        "tile_size": 16,
+        "render_mode": "RGB",
+        "rasterize_mode": "classic",
+        "sh_degree": 1 if num_bases == 4 else 3,
+        "packed": True,
+    }
+    scene["sh_degree"] = kwargs.pop("sh_degree")
+
+    gather_colors, gather_alphas, _ = gsplat.rasterization(**scene, **kwargs)
+
+    with torch.no_grad(), torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU], record_shapes=True
+    ) as profile:
+        batched_colors, batched_alphas, _ = gsplat.rasterization(**scene, **kwargs)
+
+    torch.testing.assert_close(batched_colors, gather_colors, rtol=0, atol=0)
+    torch.testing.assert_close(batched_alphas, gather_alphas, rtol=0, atol=0)
+
+    source_rows = batch_size * 32 if per_batch_sh else 32
+    source_shape = [source_rows, num_bases, 3]
+    profile_events = profile.events()
+    assert profile_events is not None
+    gathers = [
+        event
+        for event in profile_events
+        if event.name == "aten::index"
+        and event.input_shapes
+        and event.input_shapes[0] == source_shape
+    ]
+    assert (
+        not gathers
+    ), "no-grad packed SH must not materialize [nnz, K, D] coefficients"
+
+    with torch.no_grad():
+        for batch_id in range(batch_size):
+            serial_scene = _scene_at_batch(scene, batch_id, batch_size)
+            serial_colors, serial_alphas, _ = gsplat.rasterization(
+                **serial_scene, **kwargs
+            )
+            torch.testing.assert_close(
+                batched_colors[batch_id], serial_colors, rtol=0, atol=0
+            )
+            torch.testing.assert_close(
+                batched_alphas[batch_id], serial_alphas, rtol=0, atol=0
+            )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterization_packed_per_batch_sh_no_visible_gaussians():
+    torch.manual_seed(26)
+    scene = _make_cpp_classic_rasterization_scene(
+        batch_dims=(2,), n_gaussians=32, use_color_sh=True, per_batch_sh=True
+    )
+    scene["means"][..., 2] *= -1
+    backgrounds = torch.rand(2, scene["viewmats"].shape[-3], 3, device=device)
+
+    with torch.no_grad():
+        colors, alphas, meta = gsplat.rasterization(
+            **scene,
+            width=32,
+            height=32,
+            tile_size=16,
+            render_mode="RGB",
+            packed=True,
+            backgrounds=backgrounds,
+        )
+
+    assert meta["gaussian_ids"].numel() == 0
+    torch.testing.assert_close(alphas, torch.zeros_like(alphas), rtol=0, atol=0)
+    torch.testing.assert_close(
+        colors, backgrounds[..., None, None, :].expand_as(colors), rtol=0, atol=0
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
