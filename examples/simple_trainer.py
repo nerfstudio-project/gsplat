@@ -21,7 +21,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING, Union
 
 import imageio
 import numpy as np
@@ -29,7 +29,6 @@ import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
-import viser
 import yaml
 from gsplat.color_correct import color_correct_affine, color_correct_quadratic
 from datasets.colmap import Dataset, Parser
@@ -71,8 +70,11 @@ except ModuleNotFoundError as e:
     ) from e
 from gsplat.cuda._wrapper import CameraModel
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat_viewer import GsplatViewer, GsplatRenderTabState
-from nerfview import CameraState, RenderTabState, apply_float_colormap
+
+
+if TYPE_CHECKING:
+    # The viewer stack (viser, nerfview) is imported where the viewer is built.
+    from nerfview import CameraState, RenderTabState
 
 
 @dataclass
@@ -626,6 +628,9 @@ class Runner:
 
         # Viewer
         if not self.cfg.disable_viewer:
+            import viser
+            from gsplat_viewer import GsplatViewer
+
             self.server = viser.ViserServer(port=cfg.port, verbose=False)
             self.viewer = GsplatViewer(
                 server=self.server,
@@ -1440,8 +1445,11 @@ class Runner:
 
     @torch.no_grad()
     def _viewer_render_fn(
-        self, camera_state: CameraState, render_tab_state: RenderTabState
+        self, camera_state: "CameraState", render_tab_state: "RenderTabState"
     ):
+        from gsplat_viewer import GsplatRenderTabState
+        from nerfview import apply_float_colormap
+
         assert isinstance(render_tab_state, GsplatRenderTabState)
         if render_tab_state.preview_render:
             width = render_tab_state.render_width
