@@ -1008,14 +1008,16 @@ class Runner:
 
             loss.backward()
 
-            desc = f"loss={loss.item():.3f}| sh degree={sh_degree_to_use}| "
-            if cfg.depth_loss:
-                desc += f"depth loss={depthloss.item():.6f}| "
-            if cfg.pose_opt and cfg.pose_noise:
-                # monitor the pose error if we inject noise
-                pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
-                desc += f"pose err={pose_err.item():.6f}| "
-            pbar.set_description(desc)
+            # every 10 steps: reading the loss waits for the device
+            if step % 10 == 0 or step == max_steps - 1:
+                desc = f"loss={loss.item():.3f}| sh degree={sh_degree_to_use}| "
+                if cfg.depth_loss:
+                    desc += f"depth loss={depthloss.item():.6f}| "
+                if cfg.pose_opt and cfg.pose_noise:
+                    # monitor the pose error if we inject noise
+                    pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
+                    desc += f"pose err={pose_err.item():.6f}| "
+                pbar.set_description(desc)
 
             # write images (gt and render)
             # if world_rank == 0 and step % 800 == 0:
