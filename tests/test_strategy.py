@@ -164,6 +164,93 @@ def test_strategy_requires_grad():
     assert_consistent_sizes(params)
 
 
+def _dense_info(grads, radii, width=40, height=30):
+    means2d = torch.zeros_like(grads, requires_grad=True)
+    means2d.grad = grads
+    means2d.absgrad = grads.abs() * 2.0
+    return {
+        "width": width,
+        "height": height,
+        "n_cameras": grads.shape[0],
+        "radii": radii,
+        "gaussian_ids": None,
+        "means2d": means2d,
+    }
+
+
+def _expected_state(infos, n, absgrad):
+    """Per-camera, per-Gaussian reference for DefaultStrategy._update_state."""
+    grad2d, count, radii_max = torch.zeros(n), torch.zeros(n), torch.zeros(n)
+    for info in infos:
+        g = info["means2d"].absgrad if absgrad else info["means2d"].grad
+        for c in range(info["n_cameras"]):
+            for i in range(n):
+                r = info["radii"][c, i]
+                if (r > 0).all():
+                    gx = g[c, i, 0] * info["width"] / 2.0 * info["n_cameras"]
+                    gy = g[c, i, 1] * info["height"] / 2.0 * info["n_cameras"]
+                    grad2d[i] += torch.stack([gx, gy]).norm()
+                    count[i] += 1
+                    radius = r.max() / float(max(info["width"], info["height"]))
+                    radii_max[i] = max(radii_max[i], radius)
+    return grad2d, count, radii_max
+
+
+@pytest.mark.parametrize("n_cameras", [1, 3])
+@pytest.mark.parametrize("absgrad", [False, True])
+def test_default_strategy_update_state_dense(n_cameras, absgrad):
+    from gsplat.strategy import DefaultStrategy
+
+    torch.manual_seed(0)
+    n = 50
+    params = {"means": torch.zeros(n, 3)}
+    strategy = DefaultStrategy(absgrad=absgrad, refine_scale2d_stop_iter=1000)
+    state = strategy.initialize_state()
+
+    infos = []
+    for _ in range(2):  # two steps, so the radii are a running maximum
+        grads = torch.randn(n_cameras, n, 2)
+        radii = torch.randint(0, 20, (n_cameras, n, 2), dtype=torch.int32)
+        radii[:, :5] = 0  # invisible in every camera
+        radii[:, 5:10, 1] = 0  # one radius zero is invisible too
+        infos.append(_dense_info(grads, radii))
+        strategy._update_state(params, state, infos[-1], packed=False)
+
+    grad2d, count, radii_max = _expected_state(infos, n, absgrad)
+    torch.testing.assert_close(state["grad2d"], grad2d)
+    torch.testing.assert_close(state["count"], count)
+    torch.testing.assert_close(state["radii"], radii_max)
+    assert (state["count"][:10] == 0).all()
+    assert (state["grad2d"][:10] == 0).all()
+    assert (state["radii"][:10] == 0).all()
+
+
+def test_default_strategy_update_state_dense_matches_packed_one_camera():
+    from gsplat.strategy import DefaultStrategy
+
+    torch.manual_seed(0)
+    n = 50
+    params = {"means": torch.zeros(n, 3)}
+    grads = torch.randn(1, n, 2)
+    radii = torch.randint(0, 20, (1, n, 2), dtype=torch.int32)
+    dense = _dense_info(grads, radii)
+
+    sel = (radii > 0).all(dim=-1)
+    packed = dict(dense)
+    packed["gaussian_ids"] = torch.where(sel)[1]
+    packed["radii"] = radii[sel]
+    packed["means2d"] = torch.zeros(int(sel.sum()), 2, requires_grad=True)
+    packed["means2d"].grad = grads[sel]
+
+    strategy = DefaultStrategy(refine_scale2d_stop_iter=1000)
+    state_dense = strategy.initialize_state()
+    state_packed = strategy.initialize_state()
+    strategy._update_state(params, state_dense, dense, packed=False)
+    strategy._update_state(params, state_packed, packed, packed=True)
+    for key in ["grad2d", "count", "radii"]:
+        assert torch.equal(state_dense[key], state_packed[key]), key
+
+
 if __name__ == "__main__":
     test_strategy()
     test_strategy_requires_grad()

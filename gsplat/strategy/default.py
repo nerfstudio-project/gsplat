@@ -265,11 +265,19 @@ class DefaultStrategy(Strategy):
             gs_ids = info["gaussian_ids"]  # [nnz]
             radii = info["radii"].max(dim=-1).values  # [nnz]
         else:
-            # grads is [C, N, 2]
+            # grads is [C, N, 2]. Masked reductions over the cameras keep the
+            # shapes fixed, so this path needs no device-to-host sync.
             sel = (info["radii"] > 0.0).all(dim=-1)  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            grads = grads[sel]  # [nnz, 2]
-            radii = info["radii"][sel].max(dim=-1).values  # [nnz]
+            state["grad2d"] += torch.where(sel, grads.norm(dim=-1), 0.0).sum(dim=0)
+            state["count"] += sel.sum(dim=0, dtype=torch.float32)
+            if self.refine_scale2d_stop_iter > 0:
+                radii = torch.where(sel, info["radii"].max(dim=-1).values, 0)  # [C, N]
+                state["radii"] = torch.maximum(
+                    state["radii"],
+                    # normalize radii to [0, 1] screen space
+                    radii.amax(dim=0) / float(max(info["width"], info["height"])),
+                )
+            return
         state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
         state["count"].index_add_(
             0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
