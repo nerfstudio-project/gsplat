@@ -66,9 +66,13 @@ __global__ void relocation_kernel(
     {
         for(int k = 0; k <= (i - 1); ++k)
         {
-            float bin_coeff  = binoms[(i - 1) * n_max + k];
-            float term       = (pow(-1.0f, k) / sqrt(static_cast<float>(k + 1))) * pow(new_opacity, k + 1);
-            denom_sum       += (bin_coeff * term);
+            float bin_coeff = binoms[(i - 1) * n_max + k];
+            // k is an integer, so compute the alternating sign exactly. Under
+            // -use_fast_math, pow(-1.0f, k) can be lowered to an approximation
+            // that returns NaN for negative bases on some GPU architectures.
+            float sign      = (k & 1) ? -1.0f : 1.0f;
+            float term      = (sign / sqrt(static_cast<float>(k + 1))) * pow(new_opacity, k + 1);
+            denom_sum      += (bin_coeff * term);
         }
     }
     float coeff = (opacities[idx] / denom_sum);
