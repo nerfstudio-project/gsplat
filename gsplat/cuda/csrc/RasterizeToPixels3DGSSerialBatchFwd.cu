@@ -41,7 +41,7 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 template<uint32_t CDIM, uint32_t TILE_SIZE, uint32_t CTA_SIZE>
 __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     const uint32_t N,
-    const uint32_t n_isects,
+    const int64_t n_isects,
     const bool packed,
     const vec2 *__restrict__ means2d,      // [I, N, 2] or [nnz, 2]
     const vec3 *__restrict__ conics,       // [I, N, 3] or [nnz, 3]
@@ -55,7 +55,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     const uint32_t tile_width,
     const uint32_t tile_height,
     const uint32_t block_offset,
-    const int32_t *__restrict__ isect_offsets, // [I, tile_height, tile_width]
+    const int64_t *__restrict__ isect_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,   // [n_isects]
     float *__restrict__ render_colors,         // [I, image_height, image_width, CDIM]
     float *__restrict__ render_alphas,         // [I, image_height, image_width, 1]
@@ -161,11 +161,11 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    const int32_t range_start  = isect_offsets[tile_id];
-    const int32_t range_end    = (image_id == (int32_t)I - 1) && (tile_id == (int32_t)(grid_width * grid_height) - 1)
-                                   ? n_isects
-                                   : isect_offsets[tile_id + 1];
-    const uint32_t num_batches = (range_end - range_start + BATCH_SIZE - 1) / BATCH_SIZE;
+    const int64_t range_start = isect_offsets[tile_id];
+    const int64_t range_end   = (image_id == (int32_t)I - 1) && (tile_id == (int32_t)(grid_width * grid_height) - 1)
+                                  ? n_isects
+                                  : isect_offsets[tile_id + 1];
+    const int64_t num_batches = (range_end - range_start + BATCH_SIZE - 1) / BATCH_SIZE;
 
     extern __shared__ int s[];
     int32_t *id_batch      = (int32_t *)s;                                            // [BATCH_SIZE]
@@ -182,21 +182,22 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     {
         T[p] = 1.0f;
     }
-    // index of most recent gaussian to write to this thread's pixel
-    uint32_t cur_idx[PIXELS_PER_THREAD]    = {0u};
+    // Tile-relative offset of the most recent intersection to contribute.
+    int32_t last_intersection_offset[PIXELS_PER_THREAD] = {0};
     // result of the rendering for each pixel
-    float pix_out[PIXELS_PER_THREAD][CDIM] = {0.f};
+    float pix_out[PIXELS_PER_THREAD][CDIM]              = {0.f};
 
     // unroll 1: keep the outer batch loop rolled, unrolling it would inflate
     // register pressure (and icache pressure for long loops) without helping
     // throughput here. The inner per-pixel and per-CDIM loops below are also
     // unrolled.
 #    pragma unroll 1
-    for(uint32_t b = 0; b < num_batches; ++b)
+    for(int64_t b = 0; b < num_batches; ++b)
     {
         // each thread fetch 1 gaussian from front to back
-        const uint32_t batch_start = range_start + BATCH_SIZE * b;
-        const uint32_t idx         = batch_start + tid; // index of gaussian to load
+        const int64_t batch_offset = BATCH_SIZE * b;
+        const int64_t batch_start  = range_start + batch_offset;
+        const int64_t idx          = batch_start + tid; // index of gaussian to load
         if(idx < range_end)
         {
             const int32_t g       = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
@@ -219,7 +220,8 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
         }
 
         // process gaussians in the current batch
-        const uint32_t batch_size = min(BATCH_SIZE, (uint32_t)range_end - batch_start);
+        const int64_t remaining   = range_end - batch_start;
+        const uint32_t batch_size = static_cast<uint32_t>(remaining < BATCH_SIZE ? remaining : BATCH_SIZE);
         for(uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t)
         {
             const vec3 conic   = conic_batch[t];
@@ -258,8 +260,8 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
                 {
                     pix_out[p][k] += c_ptr[k] * vis;
                 }
-                cur_idx[p] = batch_start + t;
-                T[p]       = next_T;
+                last_intersection_offset[p] = static_cast<int32_t>(batch_offset + t);
+                T[p]                        = next_T;
             }
         }
 
@@ -290,7 +292,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
                     render_colors[pix_id[p] * CDIM + k]
                         = backgrounds == nullptr ? pix_out[p][k] : (pix_out[p][k] + T[p] * backgrounds[k]);
                 }
-                last_ids[pix_id[p]] = static_cast<int32_t>(cur_idx[p]);
+                last_ids[pix_id[p]] = last_intersection_offset[p];
             }
         }
     }
@@ -319,13 +321,13 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
 {
     const bool packed = means2d.dim() == 2;
 
-    const uint32_t N        = packed ? 0 : means2d.size(-2);                 // number of gaussians
-    const uint32_t I        = alphas.numel() / (image_height * image_width); // number of images
-    const uint32_t grid_h   = isect_offsets.size(-2);
-    const uint32_t grid_w   = isect_offsets.size(-1);
-    const uint32_t n_isects = flatten_ids.size(0);
-    const uint32_t n_tiles  = I * grid_h * grid_w;
-    const dim3 grid         = {n_tiles, 1, 1};
+    const uint32_t N       = packed ? 0 : means2d.size(-2);                 // number of gaussians
+    const uint32_t I       = alphas.numel() / (image_height * image_width); // number of images
+    const uint32_t grid_h  = isect_offsets.size(-2);
+    const uint32_t grid_w  = isect_offsets.size(-1);
+    const int64_t n_isects = flatten_ids.size(0);
+    const uint32_t n_tiles = I * grid_h * grid_w;
+    const dim3 grid        = {n_tiles, 1, 1};
 
     const int32_t channels = colors.size(-1);
     TORCH_CHECK_VALUE(
@@ -379,7 +381,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
                     grid_w,
                     grid_h,
                     0,
-                    isect_offsets.const_data_ptr<int32_t>(),
+                    isect_offsets.const_data_ptr<int64_t>(),
                     flatten_ids.const_data_ptr<int32_t>(),
                     renders.data_ptr<float>(),
                     alphas.data_ptr<float>(),
@@ -438,12 +440,12 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
 {
     const bool packed = means2d.dim() == 2;
 
-    const uint32_t N        = packed ? 0 : means2d.size(-2);
-    const uint32_t I        = alphas.numel() / (image_height * image_width);
-    const uint32_t grid_h   = isect_offsets.size(-2);
-    const uint32_t grid_w   = isect_offsets.size(-1);
-    const uint32_t n_isects = flatten_ids.size(0);
-    const uint32_t n_tiles  = I * grid_h * grid_w;
+    const uint32_t N       = packed ? 0 : means2d.size(-2);
+    const uint32_t I       = alphas.numel() / (image_height * image_width);
+    const uint32_t grid_h  = isect_offsets.size(-2);
+    const uint32_t grid_w  = isect_offsets.size(-1);
+    const int64_t n_isects = flatten_ids.size(0);
+    const uint32_t n_tiles = I * grid_h * grid_w;
 
     const int32_t channels = colors.size(-1);
     TORCH_CHECK_VALUE(
@@ -506,7 +508,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
                             grid_w,
                             grid_h,
                             block_offset,
-                            isect_offsets.const_data_ptr<int32_t>(),
+                            isect_offsets.const_data_ptr<int64_t>(),
                             flatten_ids.const_data_ptr<int32_t>(),
                             renders.data_ptr<float>(),
                             alphas.data_ptr<float>(),

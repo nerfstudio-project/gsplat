@@ -923,46 +923,46 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_kernels_privateuse
 }
 
 __global__ void intersect_offset_kernel(
-    const uint32_t offset,
-    const uint32_t count,
-    const uint32_t n_isects,
+    const int64_t offset,
+    const int64_t count,
+    const int64_t n_isects,
     const int64_t *__restrict__ isect_ids,
     const uint32_t I,
     const uint32_t n_tiles,
     const uint32_t tile_n_bits,
-    int32_t *__restrict__ offsets // [I, n_tiles]
+    int64_t *__restrict__ offsets // [I, n_tiles]
 )
 {
     // e.g., ids: [1, 1, 1, 3, 3], n_tiles = 6
     // counts: [0, 3, 0, 2, 0, 0]
     // cumsum: [0, 3, 3, 5, 5, 5]
     // offsets: [0, 0, 3, 3, 5, 5]
-    uint32_t idx = cg::this_grid().thread_rank();
-    if(idx >= count)
+    const int64_t local_idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(local_idx >= count)
     {
         return;
     }
-    idx += offset;
+    const int64_t idx = local_idx + offset;
 
     int64_t isect_id_curr = isect_ids[idx] >> 32;
     int64_t iid_curr      = isect_id_curr >> (tile_n_bits);
-    int64_t tid_curr      = isect_id_curr & ((1 << tile_n_bits) - 1);
+    int64_t tid_curr      = isect_id_curr & ((uint64_t{1} << tile_n_bits) - 1);
     int64_t id_curr       = iid_curr * n_tiles + tid_curr;
 
     if(idx == 0)
     {
         // write out the offsets until the first valid tile (inclusive)
-        for(uint32_t i = 0; i < id_curr + 1; ++i)
+        for(int64_t i = 0; i < id_curr + 1; ++i)
         {
-            offsets[i] = static_cast<int32_t>(idx);
+            offsets[i] = idx;
         }
     }
     if(idx == n_isects - 1)
     {
         // write out the rest of the offsets
-        for(uint32_t i = id_curr + 1; i < I * n_tiles; ++i)
+        for(int64_t i = id_curr + 1; i < static_cast<int64_t>(I) * n_tiles; ++i)
         {
-            offsets[i] = static_cast<int32_t>(n_isects);
+            offsets[i] = n_isects;
         }
     }
 
@@ -978,11 +978,11 @@ __global__ void intersect_offset_kernel(
 
         // write out the offsets between the previous and current tiles
         int64_t iid_prev = isect_id_prev >> (tile_n_bits);
-        int64_t tid_prev = isect_id_prev & ((1 << tile_n_bits) - 1);
+        int64_t tid_prev = isect_id_prev & ((uint64_t{1} << tile_n_bits) - 1);
         int64_t id_prev  = iid_prev * n_tiles + tid_prev;
-        for(uint32_t i = id_prev + 1; i < id_curr + 1; ++i)
+        for(int64_t i = id_prev + 1; i < id_curr + 1; ++i)
         {
-            offsets[i] = static_cast<int32_t>(idx);
+            offsets[i] = idx;
         }
     }
 }
@@ -1020,7 +1020,7 @@ void launch_intersect_offset_kernel(
         I,
         n_tiles,
         tile_n_bits,
-        offsets.data_ptr<int32_t>()
+        offsets.data_ptr<int64_t>()
     );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
@@ -1065,7 +1065,7 @@ void launch_intersect_offset_kernels(
                 I,
                 n_tiles,
                 tile_n_bits,
-                offsets.data_ptr<int32_t>()
+                offsets.data_ptr<int64_t>()
             );
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }

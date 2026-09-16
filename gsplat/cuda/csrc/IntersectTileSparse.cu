@@ -41,7 +41,7 @@ __global__ void intersect_offset_sparse_kernel(
     const uint32_t num_active_tiles,
     const uint32_t n_tiles,
     const uint32_t tile_n_bits,
-    int32_t *__restrict__ offsets // [num_active_tiles + 1]
+    int64_t *__restrict__ offsets // [num_active_tiles + 1]
 )
 {
     uint32_t i = cg::this_grid().thread_rank();
@@ -53,7 +53,7 @@ __global__ void intersect_offset_sparse_kernel(
     // Trailing sentinel.
     if(i == num_active_tiles)
     {
-        offsets[i] = static_cast<int32_t>(n_isects);
+        offsets[i] = n_isects;
         return;
     }
 
@@ -78,7 +78,7 @@ __global__ void intersect_offset_sparse_kernel(
             hi = mid;
         }
     }
-    offsets[i] = static_cast<int32_t>(lo);
+    offsets[i] = lo;
 }
 
 void launch_intersect_offset_sparse_kernel(
@@ -88,7 +88,7 @@ void launch_intersect_offset_sparse_kernel(
     const uint32_t tile_width,
     const uint32_t tile_height,
     // outputs
-    at::Tensor offsets // [num_active_tiles + 1] int32
+    at::Tensor offsets // [num_active_tiles + 1] int64
 )
 {
     const int64_t n_isects          = isect_ids.size(0);
@@ -107,7 +107,7 @@ void launch_intersect_offset_sparse_kernel(
         num_active_tiles,
         n_tiles,
         tile_n_bits,
-        offsets.data_ptr<int32_t>()
+        offsets.data_ptr<int64_t>()
     );
 }
 } // namespace gsplat

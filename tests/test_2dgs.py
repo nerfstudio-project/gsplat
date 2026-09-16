@@ -596,7 +596,7 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
     densify = torch.zeros((1, N, 2), device=device)
     backgrounds = torch.tensor([[0.2, 0.4, 0.6]], device=device)
     masks = torch.zeros((1, 1, 1), dtype=torch.bool, device=device)  # tile masked off
-    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int64, device=device)
     flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
 
     (

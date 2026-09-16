@@ -67,7 +67,7 @@ __global__ void
     __launch_bounds__(CTA_SIZE, min_blocks_for_cdim<CDIM, CTA_SIZE>()) rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
         const uint32_t C,
         const uint32_t N,
-        const uint32_t n_isects,
+        const int64_t n_isects,
         const bool packed,
         const vec3 *__restrict__ means,        // [B, N, 3]
         const vec4 *__restrict__ quats,        // [B, N, 4]
@@ -94,7 +94,7 @@ __global__ void
         const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
         const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
         // intersections
-        const int32_t *__restrict__ isect_offsets, // [B, C, tile_height, tile_width]
+        const int64_t *__restrict__ isect_offsets, // [B, C, tile_height, tile_width]
         const int32_t *__restrict__ flatten_ids,   // [n_isects]
         float *__restrict__ render_colors,         // [B, C, image_height, image_width, CDIM]
         float *__restrict__ render_alphas,         // [B, C, image_height, image_width, 1]
@@ -309,8 +309,8 @@ __global__ void
     }
 
     // Gaussian range for this tile
-    const int32_t range_start = isect_offsets[tile_id];
-    const int32_t range_end   = (iid == (int32_t)gridDim.x - 1) && (tile_id == (int32_t)(grid_width * grid_height) - 1)
+    const int64_t range_start = isect_offsets[tile_id];
+    const int64_t range_end   = (iid == (int32_t)gridDim.x - 1) && (tile_id == (int32_t)(grid_width * grid_height) - 1)
                                   ? n_isects
                                   : isect_offsets[tile_id + 1];
     // Logical-batch count matches the bwd's view (= ceil(range / pixels_per_tile)),
@@ -411,7 +411,8 @@ __global__ void
         // the CSR slot positions. Internally it issues FETCHES_PER_BATCH
         // cooperative fetch rounds of FETCH_SIZE (= CTA_SIZE) gaussians each
         // — this is what keeps the CTA at one warp.
-        const uint32_t logical_batch_start = range_start + LOGICAL_BATCH * lb;
+        const int32_t logical_batch_offset = static_cast<int32_t>(LOGICAL_BATCH * lb);
+        const int64_t logical_batch_start  = range_start + logical_batch_offset;
         const bool all_done                = process_logical_batch_gaussians<
             CDIM,
             LOGICAL_BATCH,
@@ -432,6 +433,7 @@ __global__ void
             scale_batch,
             normal_batch,
             logical_batch_start,
+            logical_batch_offset,
             range_end,
             // Gaussian inputs.
             flatten_ids,
@@ -584,18 +586,18 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
     bool packed = opacities.dim() == 1;
     TORCH_CHECK(!packed, "packed mode not supported for 3DGUT forward rasterization");
 
-    const uint32_t N        = packed ? 0 : means.size(-2); // number of gaussians
+    const uint32_t N       = packed ? 0 : means.size(-2); // number of gaussians
     // Number of batches: product of the leading dims. Computed this way rather
     // than means.numel()/(N*3) because:
     // - the division is undefined for an empty gaussian set (N == 0)
     // - the leading-dim product matches how the calling op sizes its outputs,
     //   so an empty input renders a clean background image instead of crashing
-    const uint32_t B        = static_cast<uint32_t>(c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)));
-    const uint32_t C        = viewmats0.size(-3); // number of cameras
-    const uint32_t I        = B * C;              // number of images
-    const uint32_t grid_h   = isect_offsets.size(-2);
-    const uint32_t grid_w   = isect_offsets.size(-1);
-    const uint32_t n_isects = flatten_ids.size(0);
+    const uint32_t B       = static_cast<uint32_t>(c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)));
+    const uint32_t C       = viewmats0.size(-3); // number of cameras
+    const uint32_t I       = B * C;              // number of images
+    const uint32_t grid_h  = isect_offsets.size(-2);
+    const uint32_t grid_w  = isect_offsets.size(-1);
+    const int64_t n_isects = flatten_ids.size(0);
 
     TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
     FThetaCameraDistortionDeviceParams ftheta_device_coeffs(gsplat::checked_deref(ftheta_coeffs, "ftheta_coeffs"));
@@ -724,7 +726,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
             lidar_device_coeffs,
             external_distortion_device_params,
             // intersections
-            isect_offsets.const_data_ptr<int32_t>(),
+            isect_offsets.const_data_ptr<int64_t>(),
             flatten_ids.const_data_ptr<int32_t>(),
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),

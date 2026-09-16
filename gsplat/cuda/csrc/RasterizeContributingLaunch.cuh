@@ -55,10 +55,10 @@ void launch_contributing_dense(
     MakeAccum make_accum
 )
 {
-    const uint32_t grid_h   = tile_offsets.size(-2);
-    const uint32_t grid_w   = tile_offsets.size(-1);
-    const uint32_t n_isects = flatten_ids.size(0);
-    const dim3 grid         = {I, grid_h, grid_w};
+    const uint32_t grid_h  = tile_offsets.size(-2);
+    const uint32_t grid_w  = tile_offsets.size(-1);
+    const int64_t n_isects = flatten_ids.size(0);
+    const dim3 grid        = {I, grid_h, grid_w};
 
     auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
     {
@@ -91,7 +91,7 @@ void launch_contributing_dense(
                 opacities.const_data_ptr<float>(),
                 image_width,
                 image_height,
-                tile_offsets.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int64_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 accum
             );
@@ -171,7 +171,7 @@ void launch_contributing_sparse(
                 tile_width,
                 tile_height,
                 active_tiles.const_data_ptr<int32_t>(),
-                tile_offsets.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int64_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 tile_pixel_mask.const_data_ptr<uint64_t>(),
                 tile_pixel_cumsum.const_data_ptr<int64_t>(),
