@@ -55,19 +55,36 @@ def test_png_compression():
     splats_c = compression_method.decompress(compress_dir)
 
 
-def test_png_compression_empty_splats(tmp_path):
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        {
+            "means": (0, 3),
+            "scales": (0, 3),
+            "quats": (0, 4),
+            "opacities": (0,),
+            "sh0": (0, 1, 3),
+            "features": (0, 8),
+        },
+        # sh_degree=0: examples/simple_trainer.py creates shN as colors[:, 1:, :],
+        # i.e. [N, 0, 3], while all other parameters are non-empty.
+        {
+            "means": (16, 3),
+            "scales": (16, 3),
+            "quats": (16, 4),
+            "opacities": (16,),
+            "sh0": (16, 1, 3),
+            "shN": (16, 0, 3),
+        },
+    ],
+    ids=["no_gaussians", "sh_degree_0"],
+)
+def test_png_compression_empty_splats(tmp_path, shapes):
     pytest.importorskip("imageio")
     from gsplat.compression import PngCompression
 
-    shapes = {
-        "means": (0, 3),
-        "scales": (0, 3),
-        "quats": (0, 4),
-        "opacities": (0,),
-        "sh0": (0, 1, 3),
-        "features": (0, 8),
-    }
-    splats = {k: torch.zeros(shape) for k, shape in shapes.items()}
+    gen = torch.Generator().manual_seed(0)
+    splats = {k: torch.randn(shape, generator=gen) for k, shape in shapes.items()}
 
     compression_method = PngCompression(use_sort=False, verbose=False)
     compression_method.compress(str(tmp_path), splats)
@@ -80,7 +97,7 @@ def test_png_compression_empty_splats(tmp_path):
 
 
 def test_png_compression_empty_kmeans(tmp_path):
-    pytest.importorskip("torchpq")
+    # Empty input returns before the torchpq import, so torchpq is not needed.
     from gsplat.compression.png_compression import (
         _compress_kmeans,
         _decompress_kmeans,

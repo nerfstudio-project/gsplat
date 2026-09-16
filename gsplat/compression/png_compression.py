@@ -361,19 +361,20 @@ def _compress_kmeans(
     Returns:
         Dict[str, Any]: metadata
     """
-    try:
-        from torchpq.clustering import KMeans
-    except:
-        raise ImportError(
-            "Please install extra dependencies with 'pip install torchpq cupy' to use K-means clustering"
-        )
-
+    # Checked before the import: shN is empty for sh_degree=0 and needs no K-means.
     if params.numel() == 0:
         meta = {
             "shape": list(params.shape),
             "dtype": str(params.dtype).split(".")[1],
         }
         return meta
+
+    try:
+        from torchpq.clustering import KMeans
+    except:
+        raise ImportError(
+            "Please install extra dependencies with 'pip install torchpq cupy' to use K-means clustering"
+        )
 
     kmeans = KMeans(n_clusters=n_clusters, distance="manhattan", verbose=verbose)
     x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
