@@ -171,7 +171,7 @@ def _compress_png(
     """
     import imageio.v2 as imageio
 
-    if torch.numel == 0:
+    if params.numel() == 0:
         meta = {
             "shape": list(params.shape),
             "dtype": str(params.dtype).split(".")[1],
@@ -212,7 +212,7 @@ def _decompress_png(compress_dir: str, param_name: str, meta: Dict[str, Any]) ->
 
     if not np.all(meta["shape"]):
         params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
-        return meta
+        return params
 
     img = imageio.imread(os.path.join(compress_dir, f"{param_name}.png"))
     img_norm = img / (2**8 - 1)
@@ -243,7 +243,7 @@ def _compress_png_16bit(
     """
     import imageio.v2 as imageio
 
-    if torch.numel == 0:
+    if params.numel() == 0:
         meta = {
             "shape": list(params.shape),
             "dtype": str(params.dtype).split(".")[1],
@@ -292,7 +292,7 @@ def _decompress_png_16bit(
 
     if not np.all(meta["shape"]):
         params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
-        return meta
+        return params
 
     img_l = imageio.imread(os.path.join(compress_dir, f"{param_name}_l.png"))
     img_u = imageio.imread(os.path.join(compress_dir, f"{param_name}_u.png"))
@@ -368,7 +368,7 @@ def _compress_kmeans(
             "Please install extra dependencies with 'pip install torchpq cupy' to use K-means clustering"
         )
 
-    if torch.numel == 0:
+    if params.numel() == 0:
         meta = {
             "shape": list(params.shape),
             "dtype": str(params.dtype).split(".")[1],
@@ -420,7 +420,7 @@ def _decompress_kmeans(
     """
     if not np.all(meta["shape"]):
         params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
-        return meta
+        return params
 
     npz_dict = np.load(os.path.join(compress_dir, f"{param_name}.npz"))
     centroids_quant = npz_dict["centroids"]

@@ -55,5 +55,46 @@ def test_png_compression():
     splats_c = compression_method.decompress(compress_dir)
 
 
+def test_png_compression_empty_splats(tmp_path):
+    pytest.importorskip("imageio")
+    from gsplat.compression import PngCompression
+
+    shapes = {
+        "means": (0, 3),
+        "scales": (0, 3),
+        "quats": (0, 4),
+        "opacities": (0,),
+        "sh0": (0, 1, 3),
+        "features": (0, 8),
+    }
+    splats = {k: torch.zeros(shape) for k, shape in shapes.items()}
+
+    compression_method = PngCompression(use_sort=False, verbose=False)
+    compression_method.compress(str(tmp_path), splats)
+    splats_c = compression_method.decompress(str(tmp_path))
+
+    for k, shape in shapes.items():
+        assert isinstance(splats_c[k], torch.Tensor), k
+        assert splats_c[k].shape == shape, k
+        assert splats_c[k].dtype == torch.float32, k
+
+
+def test_png_compression_empty_kmeans(tmp_path):
+    pytest.importorskip("torchpq")
+    from gsplat.compression.png_compression import (
+        _compress_kmeans,
+        _decompress_kmeans,
+    )
+
+    meta = _compress_kmeans(
+        str(tmp_path), "shN", torch.zeros(0, 15, 3), n_sidelen=0, verbose=False
+    )
+    params = _decompress_kmeans(str(tmp_path), "shN", meta)
+
+    assert isinstance(params, torch.Tensor)
+    assert params.shape == (0, 15, 3)
+    assert params.dtype == torch.float32
+
+
 if __name__ == "__main__":
     test_png_compression()
