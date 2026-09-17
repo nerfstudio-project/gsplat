@@ -148,25 +148,19 @@ def test_compute_relocation_all_ratios_match_reference():
 
     assert torch.isfinite(new_opacities).all()
     assert torch.isfinite(new_scales).all()
-    torch.testing.assert_close(
-        new_opacities.cpu(), ref_opacities, rtol=1e-6, atol=1e-7
-    )
-    torch.testing.assert_close(
-        new_scales.cpu(), ref_scales, rtol=1e-5, atol=1e-6
-    )
+    torch.testing.assert_close(new_opacities.cpu(), ref_opacities, rtol=1e-6, atol=1e-7)
+    torch.testing.assert_close(new_scales.cpu(), ref_scales, rtol=1e-5, atol=1e-6)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="relocation is a CUDA op")
-def test_relocate_many_duplicates_keeps_parameters_finite():
+def test_relocate_many_duplicates_preserves_optimizer_state():
     """Exercise kernel output plus Parameter and optimizer-state writeback."""
     torch.manual_seed(0)
     n_points = 512
     n_alive = 4
     min_opacity = 0.005
 
-    opacity_values = torch.full(
-        (n_points,), 1e-3, device=device, dtype=torch.float32
-    )
+    opacity_values = torch.full((n_points,), 1e-3, device=device, dtype=torch.float32)
     opacity_values[-n_alive:] = 0.5
 
     params = torch.nn.ParameterDict(
@@ -183,6 +177,13 @@ def test_relocate_many_duplicates_keeps_parameters_finite():
         name: torch.optim.Adam([parameter], lr=1e-3)
         for name, parameter in params.items()
     }
+    # Adam creates its moment tensors lazily. Take a real step so relocation
+    # must move and update populated optimizer state, not just empty dicts.
+    for name, parameter in params.items():
+        parameter.grad = torch.full_like(parameter, 0.1)
+        optimizers[name].step()
+        optimizers[name].zero_grad(set_to_none=True)
+    original_params = dict(params.items())
     dead_mask = opacity_values <= min_opacity
 
     relocate(
@@ -194,5 +195,15 @@ def test_relocate_many_duplicates_keeps_parameters_finite():
         min_opacity=min_opacity,
     )
 
-    for parameter in params.values():
+    for name, parameter in params.items():
         assert torch.isfinite(parameter).all()
+        optimizer = optimizers[name]
+        assert optimizer.param_groups[0]["params"][0] is parameter
+        assert original_params[name] not in optimizer.state
+        assert parameter in optimizer.state
+        for key in ("exp_avg", "exp_avg_sq"):
+            moment = optimizer.state[parameter][key]
+            assert moment.shape == parameter.shape
+            assert torch.isfinite(moment).all()
+            assert torch.all(moment[:-n_alive] != 0)
+            assert torch.any(moment[-n_alive:] == 0)
