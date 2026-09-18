@@ -193,6 +193,9 @@ def test_argument_validation():
         weighted_kmeans(x, 4, weights=torch.ones(31))
     with pytest.raises(ValueError):
         weighted_kmeans(x, 4, weights=-torch.ones(32))
+    for chunk_size in (0, -1):
+        with pytest.raises(ValueError):
+            weighted_kmeans(x, 4, chunk_size=chunk_size)
 
 
 def test_kmeans_weights_formulas():
@@ -226,6 +229,45 @@ def test_builtin_backend_round_trip(tmp_path):
         assert npz["centroids"].shape == (32, 45)
     # every decoded splat is one of the 32 centroids
     assert len(torch.unique(out.reshape(len(out), -1), dim=0)) <= 32
+
+
+def test_png_compression_chunk_size(tmp_path, monkeypatch):
+    """kmeans_chunk_size reaches weighted_kmeans and does not change the output."""
+    import gsplat.compression.png_compression as png_compression
+
+    seen = []
+    original = png_compression.weighted_kmeans
+
+    def recording_kmeans(x, n_clusters, **kwargs):
+        seen.append(kwargs["chunk_size"])
+        # 16 clusters for 256 splats, so the clustering is not trivial (PngCompression asks
+        # for 65536, which the builtin backend clamps to the number of splats)
+        return original(x, min(n_clusters, 16), **kwargs)
+
+    monkeypatch.setattr(png_compression, "weighted_kmeans", recording_kmeans)
+    splats = _splats()
+    files = {}
+    for chunk_size in (4096, 7):
+        out = tmp_path / f"chunk_{chunk_size}"
+        out.mkdir()
+        method = PngCompression(
+            use_sort=False,
+            verbose=False,
+            kmeans_backend="builtin",
+            kmeans_weighting="opacity_area",
+            kmeans_chunk_size=chunk_size,
+        )
+        method.compress(str(out), {k: v.clone() for k, v in splats.items()})
+        files[chunk_size] = {p.name: p.read_bytes() for p in sorted(out.iterdir())}
+    assert seen == [4096, 7]
+    assert PngCompression().kmeans_chunk_size == 4096
+    with np.load(tmp_path / "chunk_4096" / "shN.npz") as a, np.load(
+        tmp_path / "chunk_7" / "shN.npz"
+    ) as b:
+        assert len(np.unique(a["labels"])) > 1
+        assert np.array_equal(a["centroids"], b["centroids"])
+        assert np.array_equal(a["labels"], b["labels"])
+    assert files[4096] == files[7]
 
 
 def test_builtin_backend_clamps_n_clusters(tmp_path):

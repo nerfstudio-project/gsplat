@@ -84,6 +84,8 @@ def weighted_kmeans(
     n, d = x.shape
     if not 0 < n_clusters <= n:
         raise ValueError(f"n_clusters must be in [1, {n}], got {n_clusters}")
+    if chunk_size < 1:
+        raise ValueError(f"chunk_size must be at least 1, got {chunk_size}")
     if weights is not None:
         if weights.shape != (n,):
             raise ValueError(

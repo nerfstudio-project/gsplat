@@ -65,12 +65,17 @@ class PngCompression:
             (``sigmoid(opacity)``) or "opacity_area" (``sigmoid(opacity)`` times the
             exponential of the two largest log-scales). Weighting spends centroids on the
             splats that cover more of the rendered image.
+        kmeans_chunk_size (int, optional): Points per assignment chunk of the "builtin"
+            backend. Its largest buffer is a ``kmeans_chunk_size x 65536`` float32 distance
+            matrix (1 GiB at the default); a smaller chunk lowers peak memory. Does not
+            change the result. Default to 4096.
     """
 
     use_sort: bool = True
     verbose: bool = True
     kmeans_backend: str = "torchpq"
     kmeans_weighting: Optional[str] = None
+    kmeans_chunk_size: int = 4096
 
     def _get_compress_fn(self, param_name: str) -> Callable:
         compress_fn_map = {
@@ -135,6 +140,7 @@ class PngCompression:
                 "verbose": self.verbose,
                 "weights": kmeans_weights,
                 "backend": self.kmeans_backend,
+                "chunk_size": self.kmeans_chunk_size,
             }
             meta[param_name] = compress_fn(
                 compress_dir, param_name, splats[param_name], **kwargs
@@ -387,6 +393,7 @@ def _compress_kmeans(
     verbose: bool = True,
     weights: Optional[Tensor] = None,
     backend: str = "torchpq",
+    chunk_size: int = 4096,
     **kwargs,
 ) -> Dict[str, Any]:
     """Run K-means clustering on parameters and save centroids and labels to a npz file.
@@ -406,6 +413,8 @@ def _compress_kmeans(
             by the "builtin" backend. Default to None (unweighted).
         backend (str, optional): "torchpq" (default) or "builtin"
             (:func:`gsplat.compression.kmeans.weighted_kmeans`). Default to "torchpq".
+        chunk_size (int, optional): points per assignment chunk of the "builtin" backend.
+            Only affects memory use and speed, not the result. Default to 4096.
 
     Returns:
         Dict[str, Any]: metadata
@@ -437,7 +446,7 @@ def _compress_kmeans(
     elif backend == "builtin":
         x = params.reshape(params.shape[0], -1)
         centroids, labels_t = weighted_kmeans(
-            x, min(n_clusters, x.shape[0]), weights=weights
+            x, min(n_clusters, x.shape[0]), weights=weights, chunk_size=chunk_size
         )
         labels = labels_t.detach().cpu().numpy()
         # Same memory layout as the TorchPQ path (a [K, D] view of a [D, K] buffer), so that
