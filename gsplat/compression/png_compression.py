@@ -36,9 +36,9 @@ class PngCompression:
     .. warning::
         This class requires the `imageio <https://pypi.org/project/imageio/>`_ and
         `plas <https://github.com/fraunhoferhhi/PLAS.git>`_ packages to be installed.
-        The default K-means backend also requires
-        `torchpq <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_;
-        ``kmeans_backend="builtin"`` needs neither TorchPQ nor CuPy.
+        The default K-means backend ("builtin") needs neither TorchPQ nor CuPy;
+        ``kmeans_backend="torchpq"`` requires
+        `torchpq <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_.
 
     .. warning::
         This class might throw away a few lowest opacities splats if the number of
@@ -58,12 +58,13 @@ class PngCompression:
         use_sort (bool, optional): Whether to sort splats before compression. Defaults to True.
         verbose (bool, optional): Whether to print verbose information. Default to True.
         kmeans_backend (str, optional): K-means implementation for the spherical harmonic
-            coefficients: "torchpq" (default, unchanged behavior) or "builtin"
-            (:func:`gsplat.compression.kmeans.weighted_kmeans`, no extra dependencies).
+            coefficients: "builtin" (default, :func:`gsplat.compression.kmeans.weighted_kmeans`,
+            no extra dependencies) or "torchpq" (unweighted manhattan K-means; requires
+            TorchPQ and ``kmeans_weighting=None``).
         kmeans_weighting (str, optional): Per-splat weighting of the K-means update, only
-            used by the "builtin" backend: None (default, unweighted), "opacity"
-            (``sigmoid(opacity)``) or "opacity_area" (``sigmoid(opacity)`` times the
-            exponential of the two largest log-scales). Weighting spends centroids on the
+            used by the "builtin" backend: "opacity_area" (default, ``sigmoid(opacity)``
+            times the exponential of the two largest log-scales), "opacity"
+            (``sigmoid(opacity)``) or None (unweighted). Weighting spends centroids on the
             splats that cover more of the rendered image.
         kmeans_chunk_size (int, optional): Points per assignment chunk of the "builtin"
             backend. Its largest buffer is a ``kmeans_chunk_size x 65536`` float32 distance
@@ -73,9 +74,17 @@ class PngCompression:
 
     use_sort: bool = True
     verbose: bool = True
-    kmeans_backend: str = "torchpq"
-    kmeans_weighting: Optional[str] = None
+    kmeans_backend: str = "builtin"
+    kmeans_weighting: Optional[str] = "opacity_area"
     kmeans_chunk_size: int = 4096
+
+    def __post_init__(self):
+        # Fail here rather than after sorting and writing the PNG files.
+        if self.kmeans_backend == "torchpq" and self.kmeans_weighting is not None:
+            raise ValueError(
+                "kmeans_weighting is only supported by the 'builtin' K-means backend: "
+                "use kmeans_weighting=None with kmeans_backend='torchpq'"
+            )
 
     def _get_compress_fn(self, param_name: str) -> Callable:
         compress_fn_map = {

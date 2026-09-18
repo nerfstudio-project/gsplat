@@ -291,8 +291,8 @@ def test_weights_rejected_by_the_torchpq_backend(tmp_path):
         )
 
 
-def test_defaults_match_the_previous_encoder(tmp_path, stub_torchpq):
-    """The default backend must write exactly the same file as before the backend option."""
+def test_torchpq_backend_matches_the_previous_encoder(tmp_path, stub_torchpq):
+    """The torchpq backend must write exactly the same file as before the backend option."""
     splats = _splats()
     ref_dir, new_dir = tmp_path / "ref", tmp_path / "new"
     ref_dir.mkdir()
@@ -301,12 +301,63 @@ def test_defaults_match_the_previous_encoder(tmp_path, stub_torchpq):
         str(ref_dir), "shN", splats["shN"], n_clusters=32, verbose=False
     )
     new_meta = _compress_kmeans(
-        str(new_dir), "shN", splats["shN"], n_clusters=32, verbose=False
+        str(new_dir),
+        "shN",
+        splats["shN"],
+        n_clusters=32,
+        verbose=False,
+        backend="torchpq",
     )
     assert new_meta == ref_meta
     assert (
         open(ref_dir / "shN.npz", "rb").read() == open(new_dir / "shN.npz", "rb").read()
     )
+
+
+def test_png_compression_torchpq_backend_matches_the_previous_encoder(
+    tmp_path, stub_torchpq
+):
+    """PngCompression with the torchpq backend (the default before the builtin backend)
+    writes the same shN file and meta as the previous encoder."""
+    splats = _splats()
+    ref_dir, new_dir = tmp_path / "ref", tmp_path / "new"
+    ref_dir.mkdir()
+    new_dir.mkdir()
+    ref_meta = _reference_compress_kmeans(
+        str(ref_dir), "shN", splats["shN"], verbose=False
+    )
+    PngCompression(
+        use_sort=False, verbose=False, kmeans_backend="torchpq", kmeans_weighting=None
+    ).compress(str(new_dir), {k: v.clone() for k, v in splats.items()})
+    assert json.loads((new_dir / "meta.json").read_text())["shN"] == ref_meta
+    assert (new_dir / "shN.npz").read_bytes() == (ref_dir / "shN.npz").read_bytes()
+
+
+def test_defaults_are_the_builtin_weighted_backend(tmp_path):
+    method = PngCompression()
+    assert method.kmeans_backend == "builtin"
+    assert method.kmeans_weighting == "opacity_area"
+    assert method.kmeans_chunk_size == 4096
+    splats = _splats()
+    files = {}
+    for name, kwargs in (
+        ("default", {}),
+        ("explicit", dict(kmeans_backend="builtin", kmeans_weighting="opacity_area")),
+    ):
+        out = tmp_path / name
+        out.mkdir()
+        PngCompression(use_sort=False, verbose=False, **kwargs).compress(
+            str(out), {k: v.clone() for k, v in splats.items()}
+        )
+        files[name] = {p.name: p.read_bytes() for p in sorted(out.iterdir())}
+    assert files["default"] == files["explicit"]
+
+
+def test_torchpq_backend_needs_kmeans_weighting_none():
+    # the default weighting is for the builtin backend; torchpq cannot use weights
+    with pytest.raises(ValueError, match="kmeans_weighting=None"):
+        PngCompression(kmeans_backend="torchpq")
+    PngCompression(kmeans_backend="torchpq", kmeans_weighting=None)
 
 
 def test_png_compression_builtin_backend_without_torchpq(tmp_path, monkeypatch):
@@ -331,12 +382,23 @@ def test_png_compression_builtin_backend_without_torchpq(tmp_path, monkeypatch):
         meta = json.loads(open(out / "meta.json").read())
         assert meta["shN"]["quantization"] == 6
 
+    # the default backend is the builtin one, so the defaults need no TorchPQ either
+    default = tmp_path / "default"
+    default.mkdir()
+    PngCompression(use_sort=False, verbose=False).compress(
+        str(default), {k: v.clone() for k, v in splats.items()}
+    )
+    assert (default / "shN.npz").exists()
+
     missing = tmp_path / "torchpq_missing"
     missing.mkdir()
     with pytest.raises(ImportError):
-        PngCompression(use_sort=False, verbose=False).compress(
-            str(missing), {k: v.clone() for k, v in splats.items()}
-        )
+        PngCompression(
+            use_sort=False,
+            verbose=False,
+            kmeans_backend="torchpq",
+            kmeans_weighting=None,
+        ).compress(str(missing), {k: v.clone() for k, v in splats.items()})
 
 
 if __name__ == "__main__":
