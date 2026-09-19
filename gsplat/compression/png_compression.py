@@ -16,13 +16,14 @@
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from gsplat.compression.kmeans import weighted_kmeans
 from gsplat.compression.sort import sort_splats
 from gsplat.utils import inverse_log_transform, log_transform
 
@@ -33,9 +34,11 @@ class PngCompression:
     K-means clustering to compress the spherical harmonic coefficents.
 
     .. warning::
-        This class requires the `imageio <https://pypi.org/project/imageio/>`_,
-        `plas <https://github.com/fraunhoferhhi/PLAS.git>`_
-        and `torchpq <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_ packages to be installed.
+        This class requires the `imageio <https://pypi.org/project/imageio/>`_ and
+        `plas <https://github.com/fraunhoferhhi/PLAS.git>`_ packages to be installed.
+        The default K-means backend ("builtin") needs neither TorchPQ nor CuPy;
+        ``kmeans_backend="torchpq"`` requires
+        `torchpq <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_.
 
     .. warning::
         This class might throw away a few lowest opacities splats if the number of
@@ -54,10 +57,34 @@ class PngCompression:
     Args:
         use_sort (bool, optional): Whether to sort splats before compression. Defaults to True.
         verbose (bool, optional): Whether to print verbose information. Default to True.
+        kmeans_backend (str, optional): K-means implementation for the spherical harmonic
+            coefficients: "builtin" (default, :func:`gsplat.compression.kmeans.weighted_kmeans`,
+            no extra dependencies) or "torchpq" (unweighted manhattan K-means; requires
+            TorchPQ and ``kmeans_weighting=None``).
+        kmeans_weighting (str, optional): Per-splat weighting of the K-means update, only
+            used by the "builtin" backend: "opacity_area" (default, ``sigmoid(opacity)``
+            times the exponential of the two largest log-scales), "opacity"
+            (``sigmoid(opacity)``) or None (unweighted). Weighting spends centroids on the
+            splats that cover more of the rendered image.
+        kmeans_chunk_size (int, optional): Points per assignment chunk of the "builtin"
+            backend. Its largest buffer is a ``kmeans_chunk_size x 65536`` float32 distance
+            matrix (1 GiB at the default); a smaller chunk lowers peak memory. Does not
+            change the result. Default to 4096.
     """
 
     use_sort: bool = True
     verbose: bool = True
+    kmeans_backend: str = "builtin"
+    kmeans_weighting: Optional[str] = "opacity_area"
+    kmeans_chunk_size: int = 4096
+
+    def __post_init__(self):
+        # Fail here rather than after sorting and writing the PNG files.
+        if self.kmeans_backend == "torchpq" and self.kmeans_weighting is not None:
+            raise ValueError(
+                "kmeans_weighting is only supported by the 'builtin' K-means backend: "
+                "use kmeans_weighting=None with kmeans_backend='torchpq'"
+            )
 
     def _get_compress_fn(self, param_name: str) -> Callable:
         compress_fn_map = {
@@ -111,12 +138,18 @@ class PngCompression:
         if self.use_sort:
             splats = sort_splats(splats)
 
+        # After sorting, so that the weights line up with the splats that are clustered.
+        kmeans_weights = _kmeans_weights(splats, self.kmeans_weighting)
+
         meta = {}
         for param_name in splats.keys():
             compress_fn = self._get_compress_fn(param_name)
             kwargs = {
                 "n_sidelen": n_sidelen,
                 "verbose": self.verbose,
+                "weights": kmeans_weights,
+                "backend": self.kmeans_backend,
+                "chunk_size": self.kmeans_chunk_size,
             }
             meta[param_name] = compress_fn(
                 compress_dir, param_name, splats[param_name], **kwargs
@@ -145,6 +178,31 @@ class PngCompression:
         # Param-specific postprocessing
         splats["means"] = inverse_log_transform(splats["means"])
         return splats
+
+
+def _kmeans_weights(
+    splats: Dict[str, Tensor], weighting: Optional[str]
+) -> Optional[Tensor]:
+    """Per-splat K-means weights, computed from pre-activation opacities and log-scales.
+
+    Args:
+        splats (Dict[str, Tensor]): splats, after sorting.
+        weighting (str, optional): None, "opacity" or "opacity_area".
+
+    Returns:
+        Tensor, optional: weights [N], or None when unweighted.
+    """
+    if weighting is None:
+        return None
+    opacities = torch.sigmoid(splats["opacities"].reshape(-1).double())
+    if weighting == "opacity":
+        return opacities
+    if weighting == "opacity_area":
+        # exp of the two largest log-scales: the extent of the splat's largest cross section,
+        # up to a constant factor.
+        log_scales = splats["scales"].double()
+        return opacities * torch.exp(log_scales.topk(2, dim=-1).values.sum(dim=-1))
+    raise ValueError(f"Unknown kmeans_weighting: {weighting}")
 
 
 def _crop_n_splats(splats: Dict[str, Tensor], n_crop: int) -> Dict[str, Tensor]:
@@ -342,12 +400,15 @@ def _compress_kmeans(
     quantization: int = 6,
     eps: float = 1e-6,
     verbose: bool = True,
+    weights: Optional[Tensor] = None,
+    backend: str = "torchpq",
+    chunk_size: int = 4096,
     **kwargs,
 ) -> Dict[str, Any]:
     """Run K-means clustering on parameters and save centroids and labels to a npz file.
 
     .. warning::
-        TorchPQ must installed to use K-means clustering.
+        The "torchpq" backend requires TorchPQ to be installed.
 
     Args:
         compress_dir (str): compression directory
@@ -357,17 +418,16 @@ def _compress_kmeans(
         quantization (int): number of bits in quantization
         eps (float, optional): small value to avoid numerical issues. Default to 1e-6.
         verbose (bool, optional): Whether to print verbose information. Default to True.
+        weights (Tensor, optional): per-splat weights [N] for the centroid update. Only used
+            by the "builtin" backend. Default to None (unweighted).
+        backend (str, optional): "torchpq" (default) or "builtin"
+            (:func:`gsplat.compression.kmeans.weighted_kmeans`). Default to "torchpq".
+        chunk_size (int, optional): points per assignment chunk of the "builtin" backend.
+            Only affects memory use and speed, not the result. Default to 4096.
 
     Returns:
         Dict[str, Any]: metadata
     """
-    try:
-        from torchpq.clustering import KMeans
-    except:
-        raise ImportError(
-            "Please install extra dependencies with 'pip install torchpq cupy' to use K-means clustering"
-        )
-
     if torch.numel == 0:
         meta = {
             "shape": list(params.shape),
@@ -375,17 +435,40 @@ def _compress_kmeans(
         }
         return meta
 
-    kmeans = KMeans(n_clusters=n_clusters, distance="manhattan", verbose=verbose)
-    x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
-    labels = kmeans.fit(x)
-    labels = labels.detach().cpu().numpy()
-    centroids = kmeans.centroids.permute(1, 0)
+    if backend == "torchpq":
+        if weights is not None:
+            raise ValueError(
+                "K-means weights are only supported by the 'builtin' backend"
+            )
+        try:
+            from torchpq.clustering import KMeans
+        except:
+            raise ImportError(
+                "Please install extra dependencies with 'pip install torchpq cupy' to use K-means clustering"
+            )
+
+        kmeans = KMeans(n_clusters=n_clusters, distance="manhattan", verbose=verbose)
+        x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
+        labels = kmeans.fit(x)
+        labels = labels.detach().cpu().numpy()
+        centroids = kmeans.centroids.permute(1, 0)
+    elif backend == "builtin":
+        x = params.reshape(params.shape[0], -1)
+        centroids, labels_t = weighted_kmeans(
+            x, min(n_clusters, x.shape[0]), weights=weights, chunk_size=chunk_size
+        )
+        labels = labels_t.detach().cpu().numpy()
+        # Same memory layout as the TorchPQ path (a [K, D] view of a [D, K] buffer), so that
+        # the npz bytes depend on the values only, not on the backend.
+        centroids = centroids.t().contiguous().t()
+    else:
+        raise ValueError(f"Unknown K-means backend: {backend}")
 
     mins = torch.min(centroids) + eps
     maxs = torch.max(centroids)
     centroids_norm = (centroids - mins) / (maxs - mins)
     centroids_norm = centroids_norm.detach().cpu().numpy()
-    centroids_quant = (
+    centroids_quant = np.asfortranarray(
         (centroids_norm * (2**quantization - 1)).round().astype(np.uint8)
     )
     labels = labels.astype(np.uint16)
