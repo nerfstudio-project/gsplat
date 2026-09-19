@@ -139,6 +139,10 @@ class Config:
 
     # Number of training steps
     max_steps: int = 30_000
+    # Decode the training images once before training and keep them in host
+    # memory, instead of decoding one image per step (COLMAP data only). Costs
+    # the decoded training set in host memory on every rank.
+    cache_images: bool = False
     # Steps to evaluate the model
     eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
     # Steps to save the model
@@ -410,6 +414,8 @@ class Runner:
 
         # Load data: Training data should contain initial points and colors.
         if cfg.data_type == "ncore":
+            if cfg.cache_images:
+                raise ValueError("cache_images is not supported for NCore data.")
             from datasets.ncore import NCoreDataset, NCoreParser
 
             self.parser = NCoreParser(
@@ -844,6 +850,9 @@ class Runner:
             )
             schedulers.extend(ppisp_schedulers)
 
+        if cfg.cache_images:
+            # before the loader starts its workers, which then share the cache
+            self.trainset.preload_images()
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
             batch_size=cfg.batch_size,
@@ -881,7 +890,8 @@ class Runner:
 
             camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
             Ks = data["K"].to(device)  # [1, 3, 3]
-            pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            # [1, H, W, 3]; uint8 with --cache_images, float32 otherwise
+            pixels = data["image"].to(device, non_blocking=True).float() / 255.0
             num_train_rays_per_step = (
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
