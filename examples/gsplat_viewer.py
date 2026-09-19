@@ -37,7 +37,7 @@ class GsplatRenderTabState(RenderTabState):
     eps2d: float = 0.3
     backgrounds: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     render_mode: Literal[
-        "rgb", "depth(accumulated)", "depth(expected)", "alpha"
+        "rgb", "depth(accumulated)", "depth(expected)", "normal", "alpha"
     ] = "rgb"
     normalize_nearfar: bool = False
     inverse: bool = False
@@ -46,6 +46,80 @@ class GsplatRenderTabState(RenderTabState):
     ] = "turbo"
     rasterize_mode: RasterizeMode = "classic"
     camera_model: CameraModel = "pinhole"
+    # Vertical world-space span for orthographic viewer rendering.
+    # Larger values zoom out; smaller values zoom in.
+    ortho_scale: float = 4.0
+
+
+def apply_ortho_scale_to_K(K, width: int, height: int, ortho_scale: float):
+    """Return intrinsics adjusted for orthographic viewer rendering.
+
+    Orthographic projection in gsplat uses ``x_img = fx * x + cx`` and
+    ``y_img = fy * y + cy``.  We expose ``ortho_scale`` as the vertical
+    world-space span, so ``fy = height / ortho_scale`` and ``fx = fy`` to
+    preserve aspect ratio.
+    """
+    K = K.clone()
+    focal = float(height) / max(float(ortho_scale), 1e-6)
+    K[..., 0, 0] = focal
+    K[..., 1, 1] = focal
+    K[..., 0, 2] = float(width) * 0.5
+    K[..., 1, 2] = float(height) * 0.5
+    return K
+
+
+# ── NHT fused-kernel UI restrictions ─────────────────────────────────────────
+#
+# The fully-fused NHT rasterize+MLP kernel emits RGB + alpha through a pinhole
+# camera only: it has no depth/normal outputs, no 2D-covariance compensation
+# (antialiased rasterization) and no projected-radius clip. Rather than
+# silently rendering those through the slower two-stage path — which makes the
+# viewer's measured framerate misleading — the NHT viewers restrict the
+# render-mode dropdown to what the fused kernel can do and grey out the
+# controls it cannot honour, with a note on how to get them back.
+#
+# viser has no per-option disabling for dropdowns, so unsupported render modes
+# are removed from the list rather than shown greyed out; the markdown note
+# below is what tells the user they exist and how to reach them.
+
+NHT_FUSED_RENDER_MODES = ("rgb", "alpha")
+
+NHT_FUSED_UNSUPPORTED_RENDER_MODES = (
+    "depth(accumulated)",
+    "depth(expected)",
+    "normal",
+)
+
+_NHT_FUSED_DISABLED_HANDLES = (
+    "camera_model_dropdown",
+    "ortho_scale_slider",
+    "rasterize_mode_dropdown",
+    "radius_clip_slider",
+)
+
+
+def apply_nht_fused_ui_restrictions(viewer: "GsplatViewer", relaunch_hint: str) -> None:
+    """Grey out the viewer controls the fully-fused NHT kernel cannot honour.
+
+    Args:
+        viewer: a populated :class:`GsplatViewer`.
+        relaunch_hint: the exact flag to pass to get the two-stage path back.
+            Differs between the standalone viewer and the trainer's embedded
+            viewer, so the caller supplies it.
+    """
+    for name in _NHT_FUSED_DISABLED_HANDLES:
+        handle = viewer._rendering_tab_handles.get(name)
+        if handle is not None:
+            handle.disabled = True
+
+    modes = ", ".join(f"`{m}`" for m in NHT_FUSED_UNSUPPORTED_RENDER_MODES)
+    with viewer._rendering_folder:
+        viewer.server.gui.add_markdown(
+            "**Fused NHT kernel active** — RGB and alpha, pinhole camera only.\n\n"
+            f"Unavailable here: {modes}, non-pinhole cameras, antialiased "
+            "rasterization, and radius clipping.\n\n"
+            f"To use any of them, relaunch the viewer with `{relaunch_hint}`."
+        )
 
 
 class GsplatViewer(Viewer):
@@ -59,7 +133,13 @@ class GsplatViewer(Viewer):
         render_fn: Callable,
         output_dir: Path,
         mode: Literal["rendering", "training"] = "rendering",
-        render_modes: tuple = ("rgb", "depth(accumulated)", "depth(expected)", "alpha"),
+        render_modes: tuple = (
+            "rgb",
+            "depth(accumulated)",
+            "depth(expected)",
+            "normal",
+            "alpha",
+        ),
     ):
         if len(render_modes) == 0:
             raise ValueError("render_modes must contain at least one mode")
@@ -175,12 +255,10 @@ class GsplatViewer(Viewer):
 
                 @render_mode_dropdown.on_update
                 def _(_) -> None:
-                    if "depth" in render_mode_dropdown.value:
-                        normalize_nearfar_checkbox.disabled = False
-                        inverse_checkbox.disabled = False
-                    else:
-                        normalize_nearfar_checkbox.disabled = True
-                        inverse_checkbox.disabled = True
+                    is_depth = "depth" in render_mode_dropdown.value
+                    is_alpha = render_mode_dropdown.value == "alpha"
+                    normalize_nearfar_checkbox.disabled = not is_depth
+                    inverse_checkbox.disabled = not (is_depth or is_alpha)
                     self.render_tab_state.render_mode = render_mode_dropdown.value
                     self.rerender(_)
 
@@ -244,6 +322,22 @@ class GsplatViewer(Viewer):
                 @camera_model_dropdown.on_update
                 def _(_) -> None:
                     self.render_tab_state.camera_model = camera_model_dropdown.value
+                    ortho_scale_slider.disabled = camera_model_dropdown.value != "ortho"
+                    self.rerender(_)
+
+                ortho_scale_slider = server.gui.add_number(
+                    "Ortho Scale",
+                    initial_value=self.render_tab_state.ortho_scale,
+                    min=1e-3,
+                    max=1e3,
+                    step=0.05,
+                    disabled=self.render_tab_state.camera_model != "ortho",
+                    hint="Vertical world-space span for orthographic rendering.",
+                )
+
+                @ortho_scale_slider.on_update
+                def _(_) -> None:
+                    self.render_tab_state.ortho_scale = float(ortho_scale_slider.value)
                     self.rerender(_)
 
         self._rendering_tab_handles.update(
@@ -260,6 +354,7 @@ class GsplatViewer(Viewer):
                 "colormap_dropdown": colormap_dropdown,
                 "rasterize_mode_dropdown": rasterize_mode_dropdown,
                 "camera_model_dropdown": camera_model_dropdown,
+                "ortho_scale_slider": ortho_scale_slider,
             }
         )
         super()._populate_rendering_tab()

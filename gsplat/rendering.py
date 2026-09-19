@@ -16,7 +16,7 @@
 
 from dataclasses import dataclass
 import math
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
 import torch
 import torch.distributed
@@ -25,6 +25,9 @@ from torch import Tensor
 from typing_extensions import Literal
 from .trace import trace_function
 from .profile import capture_inputs
+
+if TYPE_CHECKING:
+    from .nht._rendering import NHTParams
 
 from .cuda._wrapper import (
     RollingShutterType,
@@ -287,6 +290,7 @@ def rasterization(
         int
     ] = None,  # Currently only None or 3 is accepted.
     renderer_config: Optional[RendererConfig] = None,
+    nht_params: Optional["NHTParams"] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -483,6 +487,14 @@ def rasterization(
             :class:`RendererConfig_MixedBatch`, which uses the existing mixed-batch
             rasterizer implementation. Non-default configs require
             ``with_eval3d=True``.
+        nht_params: Neural Harmonic Textures parameters. Default is None, which
+            renders standard 3DGS. When given (and ``enabled``), ``colors`` is
+            interpreted as tetrahedral vertex features and rendered through the
+            NHT harmonic-encoding kernel, which requires ``with_eval3d=True``
+            and ``with_ut=True`` and does not support ``rays``. Extra signals
+            are left untouched on this path; their width is reported through
+            ``meta["nht_extra_signal_dim"]``. Normals, when requested, are
+            derived from the rendered depth. See :class:`NHTParams`.
 
     Returns:
         A tuple:
@@ -534,6 +546,14 @@ def rasterization(
         height = lidar_coeffs.n_rows
 
     tile_size = _resolve_tile_size(tile_size, with_eval3d, width, height)
+
+    # NHT routing. The orchestration op owns the NHT branch (channel layout,
+    # raster dispatch and depth-derived normals); Python only flattens the
+    # dataclass into the three scalars the schema takes. Compatibility checks
+    # (with_eval3d / with_ut / rays) live in the op alongside the others.
+    nht_enabled = nht_params is not None and nht_params.enabled
+    nht_center_ray_mode = bool(nht_params.center_ray_mode) if nht_enabled else False
+    nht_ray_dir_scale = float(nht_params.ray_dir_scale) if nht_enabled else 1.0
 
     if covars is not None:
         quats, scales = None, None
@@ -647,6 +667,9 @@ def rasterization(
         renderer_config_impl,
         process_group_name,
         world_size,
+        nht_enabled,
+        nht_center_ray_mode,
+        nht_ray_dir_scale,
     )
 
     if absgrad and not with_eval3d:
@@ -683,7 +706,13 @@ def rasterization(
     }
 
     if extra_signals is not None:
-        meta["render_extra_signals"] = render_extra_signals
+        if nht_enabled:
+            # NHT renders vertex features through its own encoding kernel and
+            # leaves extra signals untouched; report their width so callers can
+            # still slice their own per-Gaussian buffers.
+            meta["nht_extra_signal_dim"] = extra_signals.shape[-1]
+        else:
+            meta["render_extra_signals"] = render_extra_signals
     if return_normals:
         meta["normals"] = render_normals
 
@@ -745,6 +774,7 @@ def _rasterization(
     with_eval3d: bool = False,
     with_ut: bool = False,
     camera_model: CameraModel = "pinhole",
+    global_z_order: bool = True,
     lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     extra_signals: Optional[
         Tensor
@@ -838,6 +868,7 @@ def _rasterization(
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
             lidar_coeffs=lidar_coeffs,
+            global_z_order=global_z_order,
         )
     else:
         if rays is not None:

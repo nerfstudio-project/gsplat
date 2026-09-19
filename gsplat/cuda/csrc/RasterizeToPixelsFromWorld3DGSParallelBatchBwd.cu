@@ -25,6 +25,7 @@
 #    include <ATen/core/Tensor.h>
 #    include <ATen/cuda/Atomic.cuh>
 #    include <ATen/cuda/cub.h>
+#    include <bit>
 #    include <c10/cuda/CUDAStream.h>
 #    include <cooperative_groups.h>
 #    include <cstdint>
@@ -187,7 +188,9 @@ namespace
         {
             return 0;
         }
-        return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
+        // std::countl_zero rather than __builtin_clzll: the latter is a GCC/Clang
+        // builtin that MSVC does not provide, and this file is compiled on Windows.
+        return 64u - static_cast<uint32_t>(std::countl_zero(x - 1));
     }
 } // namespace
 

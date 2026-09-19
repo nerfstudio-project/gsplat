@@ -65,7 +65,10 @@ def get_build_parameters() -> SimpleNamespace:
     extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
     extra_cuda_cflags += ["-lineinfo"] if DEBUG else []
-    extra_cflags += ["-Wno-attributes"]
+    # GCC/Clang-only warning switch; MSVC rejects it outright (D8021 invalid
+    # numeric argument). Matches the guard in gsplat/cuda/build.py.
+    if os.name != "nt":
+        extra_cflags += ["-Wno-attributes"]
     if os.name != "nt":
         extra_cflags += ["-Wno-sign-compare"]
 

@@ -305,10 +305,13 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
 
     auto launch_kernel = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
-
         auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
         {
+            // CDIM is declared inside `launch_variant` rather than the enclosing
+            // lambda: MSVC rejects an outer generic lambda's constexpr local as a
+            // simple capture (C3495), so the kernel instantiations below fail to
+            // compile on Windows when it lives one scope up.
+            constexpr uint32_t CDIM  = ChannelsT::value;
             const dim3 threads       = dim3{CTA_SIZE, 1, 1};
             const int64_t shmem_size = CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 

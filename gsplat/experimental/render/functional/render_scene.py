@@ -15,17 +15,21 @@
 
 """Render dispatcher for the ``experimental`` package.
 
-Dispatches to the Inference rasteriser for ``GaussianInferenceScene``.
+Dispatches to the Inference rasteriser for ``GaussianInferenceScene``, and to
+the differentiable NHT rasteriser for ``GaussianNHTScene``.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from gsplat.scene import GaussianInferenceScene
+from gsplat.scene import GaussianInferenceScene, GaussianNHTScene
 
 from .gaussian_inference import (
     rasterize_gaussian_inference_scene,
+)
+from .gaussian_nht import (
+    rasterize_gaussian_nht_scene,
 )
 from ..types import RenderReturn
 
@@ -36,17 +40,23 @@ def render_scene(
     out: Optional[RenderReturn] = None,
     **request: Any,
 ) -> RenderReturn:
-    """Render a ``GaussianInferenceScene``.
+    """Render a ``GaussianInferenceScene`` or a ``GaussianNHTScene``.
 
     Raises:
-        TypeError: If *scene* is not a :class:`GaussianInferenceScene`.
+        TypeError: If *scene* is neither a :class:`GaussianInferenceScene`
+            nor a :class:`GaussianNHTScene`.
     """
-    if not isinstance(scene, GaussianInferenceScene):
-        raise TypeError(
-            f"render_scene requires a GaussianInferenceScene; "
-            f"got {type(scene).__name__}"
-        )
+    if isinstance(scene, GaussianNHTScene):
+        ret = rasterize_gaussian_nht_scene(scene, out=out, **request)
+        ret.metadata["render_path"] = "nht"
+        return ret
 
-    ret = rasterize_gaussian_inference_scene(scene, out=out, **request)
-    ret.metadata["render_path"] = "inference"
-    return ret
+    if isinstance(scene, GaussianInferenceScene):
+        ret = rasterize_gaussian_inference_scene(scene, out=out, **request)
+        ret.metadata["render_path"] = "inference"
+        return ret
+
+    raise TypeError(
+        f"render_scene requires a GaussianInferenceScene or GaussianNHTScene; "
+        f"got {type(scene).__name__}"
+    )

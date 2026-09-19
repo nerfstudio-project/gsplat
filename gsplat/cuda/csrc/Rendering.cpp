@@ -31,6 +31,7 @@
 #include "Config.h"
 #include "DistributedCollectives.h"
 #include "Intersect.h"
+#include "OpsNHT.h"
 #include "Projection.h"
 #include "Rasterization.h"
 #include "SphericalHarmonics.h"
@@ -247,6 +248,13 @@ namespace
             !calc_compensations || (!with_eval3d && !with_ut),
             "Antialiased rasterization is only supported for classic 3DGS"
         );
+        // NOTE: nv/nht-rebase additionally required global_z_order=False for lidar
+        // cameras (Euclidean-distance ordering is the physically correct one there).
+        // That assert is deliberately not carried over: upstream's own
+        // test_rasterization_cpp_ut_lidar_absgrad_forward_neutral renders a lidar
+        // camera with the default global_z_order=True, so enforcing it here fails
+        // the upstream suite. Re-add it together with those test updates if the
+        // stricter contract is still wanted.
         TORCH_CHECK(global_z_order || with_ut, "global_z_order can be false only if with_ut=True");
         TORCH_CHECK(
             with_ut || camera_model != CameraModelType::FTHETA,
@@ -740,6 +748,58 @@ namespace
 
         return std::make_tuple(final_render_colors, render_extra_signals);
     }
+
+#    if GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
+    // Surface normals from the NHT depth render. Port of gsplat.utils
+    // depth_to_normal: unproject the depth map to world-space points, then
+    // normalize the cross product of neighbouring-pixel point differences. Unlike
+    // the 2DGS helper further down this file, `z_depth` is a parameter: the NHT
+    // path renders ray depth (for which unnormalized directions would be wrong)
+    // whenever the render mode asks for hit distance.
+    at::Tensor depth_to_normal_nht(
+        const at::Tensor &depths, const at::Tensor &camtoworlds, const at::Tensor &Ks, bool z_depth
+    )
+    {
+        const int64_t height         = depths.size(-3);
+        const int64_t width          = depths.size(-2);
+        auto opts                    = depths.options();
+        std::vector<at::Tensor> grid = at::meshgrid({at::arange(width, opts), at::arange(height, opts)}, "xy");
+        const at::Tensor &x          = grid[0]; // [H, W]
+        const at::Tensor &y          = grid[1]; // [H, W]
+
+        at::Tensor fx = Ks.select(-2, 0).select(-1, 0).unsqueeze(-1).unsqueeze(-1); // [..., 1, 1]
+        at::Tensor fy = Ks.select(-2, 1).select(-1, 1).unsqueeze(-1).unsqueeze(-1);
+        at::Tensor cx = Ks.select(-2, 0).select(-1, 2).unsqueeze(-1).unsqueeze(-1);
+        at::Tensor cy = Ks.select(-2, 1).select(-1, 2).unsqueeze(-1).unsqueeze(-1);
+
+        at::Tensor camera_dirs = at::stack({(x - cx + 0.5) / fx, (y - cy + 0.5) / fy}, -1); // [..., H, W, 2]
+        camera_dirs            = at::constant_pad_nd(camera_dirs, {0, 1}, 1.0);             // [..., H, W, 3]
+
+        at::Tensor R          = camtoworlds.narrow(-2, 0, 3).narrow(-1, 0, 3); // [..., 3, 3]
+        at::Tensor directions = at::einsum("...ij,...hwj->...hwi", {R, camera_dirs});
+        if(!z_depth)
+        {
+            at::Tensor dir_norm = at::sqrt((directions * directions).sum(-1, true)).clamp_min(1e-12);
+            directions          = directions / dir_norm;
+        }
+        at::Tensor origins = camtoworlds.narrow(-2, 0, 3).select(-1, 3); // [..., 3]
+        at::Tensor points  = origins.unsqueeze(-2).unsqueeze(-2) + depths * directions;
+
+        const int64_t h_dim = points.dim() - 3;
+        const int64_t w_dim = points.dim() - 2;
+        const int64_t H     = points.size(h_dim);
+        const int64_t W     = points.size(w_dim);
+        at::Tensor dx       = points.narrow(h_dim, 2, H - 2).narrow(w_dim, 1, W - 2)
+                            - points.narrow(h_dim, 0, H - 2).narrow(w_dim, 1, W - 2);
+        at::Tensor dy       = points.narrow(h_dim, 1, H - 2).narrow(w_dim, 2, W - 2)
+                            - points.narrow(h_dim, 1, H - 2).narrow(w_dim, 0, W - 2);
+        at::Tensor normals  = at::linalg_cross(dx, dy, -1);
+        at::Tensor norm     = at::sqrt((normals * normals).sum(-1, true)).clamp_min(1e-12);
+        normals             = normals / norm;
+        // F.pad(normals, (0, 0, 1, 1, 1, 1)): pad W and H dims by 1 on each side.
+        return at::constant_pad_nd(normals, {0, 0, 1, 1, 1, 1}, 0.0); // [..., H, W, 3]
+    }
+#    endif // GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
 } // namespace
 
 Rasterization3DGSResult rasterization_3dgs(
@@ -769,8 +829,8 @@ Rasterization3DGSResult rasterization_3dgs(
     int64_t channel_chunk,
     bool has_color,
     int64_t sh_degree,
-    const at::optional<at::Tensor> &extra_signals,
-    int64_t extra_signals_sh_degree,
+    const at::optional<at::Tensor> &extra_signals_in,
+    int64_t extra_signals_sh_degree_in,
     bool append_depth,
     bool expected_depth,
     bool with_eval3d,
@@ -790,7 +850,10 @@ Rasterization3DGSResult rasterization_3dgs(
     bool return_normals,
     int64_t renderer_config,
     const at::optional<std::string> &process_group_name,
-    int64_t world_size
+    int64_t world_size,
+    bool nht_enabled,
+    bool nht_center_ray_mode,
+    double nht_ray_dir_scale
 )
 {
     DEVICE_GUARD(means);
@@ -799,6 +862,35 @@ Rasterization3DGSResult rasterization_3dgs(
     // Input validation, including distributed-mode rejection, lives in
     // check_rasterization_3dgs_inputs; the seams below gather/scatter when set.
     const bool distributed = process_group_name.has_value();
+
+#    if !(GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS)
+    TORCH_CHECK(!nht_enabled, "NHT rasterization requires building with GSPLAT_BUILD_NHT=1 and GSPLAT_BUILD_3DGS=1");
+#    endif
+
+    if(nht_enabled)
+    {
+        // NHT interpolates tetrahedral vertex features per ray inside its own
+        // kernel, so it is only defined on the world-evaluation path.
+        TORCH_CHECK(with_eval3d && with_ut, "NHT requires with_eval3d=True and with_ut=True");
+        TORCH_CHECK(
+            !rays.has_value(),
+            "NHT does not support per-pixel `rays` input (the camera model dispatch computes rays itself)"
+        );
+        TORCH_CHECK(has_color && colors.has_value(), "NHT requires vertex features to be passed as `colors`");
+    }
+
+    // NHT renders vertex features through its own harmonic-encoding kernel; extra
+    // signals are not part of that channel layout, so they are left untouched on
+    // the NHT path (the Python entry point reports their width through
+    // `meta["nht_extra_signal_dim"]` instead).
+    const at::optional<at::Tensor> extra_signals = nht_enabled ? at::optional<at::Tensor>{} : extra_signals_in;
+    const int64_t extra_signals_sh_degree        = nht_enabled ? -1 : extra_signals_sh_degree_in;
+
+    // NHT derives its surface normals from the rendered depth, so a depth column
+    // has to be rasterized even in render modes that do not return one. It is
+    // stripped again before the caller-visible post-processing below.
+    const bool nht_depth_for_normals   = nht_enabled && return_normals && !append_depth;
+    const bool append_depth_for_render = append_depth || nht_depth_for_normals;
 
     check_rasterization_3dgs_inputs(
         means,
@@ -820,7 +912,7 @@ Rasterization3DGSResult rasterization_3dgs(
         extra_signals,
         backgrounds,
         has_color,
-        append_depth,
+        append_depth_for_render,
         sh_degree,
         extra_signals_sh_degree,
         packed,
@@ -1106,7 +1198,7 @@ Rasterization3DGSResult rasterization_3dgs(
             extra_in = es;
         }
 
-        const bool has_depth     = append_depth;
+        const bool has_depth     = append_depth_for_render;
         const bool depth_is_zero = use_hit_distance;
         const bool depth_ok      = !has_depth || depth_is_zero || (depths.scalar_type() == at::kFloat);
         at::optional<at::Tensor> depths_in
@@ -1265,7 +1357,7 @@ Rasterization3DGSResult rasterization_3dgs(
     // The fused fast-path already wrote the depth column into projected_features,
     // so only the background depth channel needs assembling in that case.
     at::optional<at::Tensor> render_backgrounds = backgrounds;
-    if(append_depth)
+    if(append_depth_for_render)
     {
         if(fused_assembled)
         {
@@ -1350,9 +1442,90 @@ Rasterization3DGSResult rasterization_3dgs(
     at::Tensor raster_isect_offsets = isect_offsets.contiguous();
     at::Tensor raster_flatten_ids   = isects.flatten_ids.contiguous();
     const int64_t channels          = projected_features.size(-1);
-    for(int64_t start = 0; start < channels; start += channel_chunk)
+
+#    if GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
+    if(nht_enabled)
     {
-        const int64_t end         = std::min(start + channel_chunk, channels);
+        // NHT is never chunked: the kernel interpolates all VERTEX_PER_PRIM
+        // feature groups of a Gaussian together, so splitting the channel axis
+        // would break the tetrahedral layout. Its normals also come from the
+        // depth render below rather than from primitive orientations, so the
+        // kernel's own normal accumulation stays off.
+        RasterizeToPixelsFromWorldNHT3DGSResult raster = rasterize_to_pixels_from_world_nht_3dgs(
+            means,
+            quats.value(),
+            scales.value(),
+            projected_features.contiguous(),
+            kernel_opacities,
+            contiguous_optional(render_backgrounds),
+            at::optional<at::Tensor>(),
+            image_width,
+            image_height,
+            tile_size,
+            viewmats,
+            viewmats_rs,
+            Ks,
+            static_cast<int64_t>(camera_model),
+            ut_params,
+            static_cast<int64_t>(rolling_shutter),
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            ftheta_coeffs,
+            lidar_coeffs,
+            external_distortion_params,
+            raster_isect_offsets,
+            raster_flatten_ids,
+            nht_center_ray_mode,
+            nht_ray_dir_scale,
+            use_hit_distance,
+            /*with_normals=*/false
+        );
+
+        // Match the standard eval3d channel convention: depth is the last color
+        // channel. The NHT render is [encoded features | 3 ray dirs], and the
+        // kernel emits depth as a separate output, so it is appended here.
+        at::Tensor nht_render_colors = raster.renders;
+        if(raster.depth.defined() && raster.depth.numel() > 0)
+        {
+            nht_render_colors = at::cat({nht_render_colors, raster.depth}, -1);
+        }
+        render_alphas = raster.alphas;
+
+        if(return_normals)
+        {
+            TORCH_CHECK(
+                raster.depth.defined() && raster.depth.numel() > 0,
+                "NHT return_normals=True requires a rendered depth channel"
+            );
+            at::Tensor depth_for_normals = nht_render_colors.narrow(-1, nht_render_colors.size(-1) - 1, 1);
+            // Depth accumulates the same way colors do, so the alpha-weighted
+            // modes (and the column rendered purely to derive normals) need the
+            // expected-depth normalization before unprojection.
+            if(nht_depth_for_normals || expected_depth)
+            {
+                depth_for_normals = depth_for_normals / render_alphas.clamp_min(1e-10);
+            }
+            render_normals = depth_to_normal_nht(
+                depth_for_normals.to(at::kFloat), at::linalg_inv(viewmats), Ks, /*z_depth=*/!use_hit_distance
+            );
+            if(nht_depth_for_normals)
+            {
+                // That depth column only existed to derive normals; it is not part
+                // of the caller's requested channel layout.
+                nht_render_colors = nht_render_colors.narrow(-1, 0, nht_render_colors.size(-1) - 1);
+            }
+        }
+        render_color_chunks.push_back(nht_render_colors);
+    }
+#    endif // GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
+
+    // Render at most channel_chunk channels per call. NHT rendered everything in
+    // the single call above, so the chunk loop is a no-op for it.
+    const int64_t chunk_channels = nht_enabled ? 0 : channels;
+    for(int64_t start = 0; start < chunk_channels; start += channel_chunk)
+    {
+        const int64_t end         = std::min(start + channel_chunk, chunk_channels);
         at::Tensor features_chunk = channel_chunk_or_contiguous(projected_features, start, end);
         at::optional<at::Tensor> backgrounds_chunk;
         if(render_backgrounds.has_value())
@@ -1449,8 +1622,12 @@ Rasterization3DGSResult rasterization_3dgs(
     // --- Reassemble output channels --------------------------------------
     at::Tensor render_colors
         = render_color_chunks.size() == 1 ? render_color_chunks[0] : at::cat(render_color_chunks, -1);
+    // On the NHT path the rendered primary width is the harmonically-encoded
+    // feature count plus the ray-direction channels, not colors.size(-1). There
+    // are no extra signals to slice out there, so post-processing only needs the
+    // depth column and the primary width is reported as zero.
     const int64_t primary_channels
-        = (has_color && colors.has_value() && colors.value().dim() > 0) ? colors.value().size(-1) : 0;
+        = (!nht_enabled && has_color && colors.has_value() && colors.value().dim() > 0) ? colors.value().size(-1) : 0;
     const int64_t extra_signal_channels
         = (extra_signals.has_value() && extra_signals.value().dim() > 0) ? extra_signals.value().size(-1) : 0;
     at::Tensor render_extra_signals;
