@@ -7089,6 +7089,360 @@ def test_sh_backward_zeros_padded_k_gt_max_supported(sh_degree: int, K: int):
         )
 
 
+def _make_sb_inputs(N: int, C: int, M: int, batch_dims: Tuple[int, ...], packed: bool):
+    """Build Spherical Beta inputs plus the view directions the torch reference needs."""
+    coeffs_src = torch.randn(N, M, 6, device=device)
+    # Raw sharpnesses straight from randn reach exponents of 4*e^3, which makes
+    # the lobes numerically extreme; scale them into a trainable range.
+    coeffs_src[..., 5] *= 0.5
+    coeffs_src.requires_grad_(True)
+
+    means = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(*batch_dims, C, 4, 4).clone()
+    angles = torch.randn(*batch_dims, C, device=device)
+    viewmats[..., 0, 0] = angles.cos()
+    viewmats[..., 0, 1] = -angles.sin()
+    viewmats[..., 1, 0] = angles.sin()
+    viewmats[..., 1, 1] = angles.cos()
+    viewmats[..., :3, 3] = torch.randn(*batch_dims, C, 3, device=device)
+    viewmats.requires_grad_(True)
+
+    if packed:
+        # Mirror the packed call site: a [N, M, 6] source of per-Gaussian lobes
+        # is gathered into [nnz, M, 6] via gaussian_ids. nnz > N with random ids
+        # exercises the duplicate-gaussian gather VJP.
+        nnz = 3 * N
+        gaussian_ids = torch.randint(0, N, (nnz,), device=device)
+        assert gaussian_ids.unique().numel() < nnz
+        batch_ids = torch.zeros(nnz, dtype=torch.long, device=device)
+        camera_ids = torch.randint(0, C, (nnz,), device=device)
+        coeffs = coeffs_src[gaussian_ids]
+        rotations = viewmats[camera_ids, :3, :3]
+        translations = viewmats[camera_ids, :3, 3]
+        dirs = means[gaussian_ids] + torch.bmm(
+            rotations.transpose(-1, -2), translations.unsqueeze(-1)
+        ).squeeze(-1)
+        base = torch.randn(nnz, 3, device=device, requires_grad=True)
+        out_shape = (nnz, 3)
+    else:
+        coeffs = coeffs_src
+        batch_ids = camera_ids = gaussian_ids = None
+        camera_offsets = torch.matmul(
+            viewmats[..., :3, :3].transpose(-1, -2),
+            viewmats[..., :3, 3].unsqueeze(-1),
+        ).squeeze(-1)
+        dirs = means[..., None, :, :] + camera_offsets[..., :, None, :]
+        base = torch.randn(*batch_dims, C, N, 3, device=device, requires_grad=True)
+        out_shape = (*batch_dims, C, N, 3)
+
+    ids = dict(batch_ids=batch_ids, camera_ids=camera_ids, gaussian_ids=gaussian_ids)
+    return coeffs_src, coeffs, means, viewmats, base, dirs, ids, out_shape
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("lobes_to_use", [0, 1, 2, 4])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+@pytest.mark.parametrize("packed", [False, True])
+def test_sb(lobes_to_use: int, batch_dims: Tuple[int, ...], packed: bool):
+    from gsplat.cuda._torch_impl import _spherical_beta
+    from gsplat.cuda._wrapper import spherical_beta
+
+    if packed and batch_dims != ():
+        pytest.skip("packed inputs are always rank-2 dirs; batch_dims is irrelevant")
+
+    torch.manual_seed(42)
+
+    N, C, M = 1000, 3, 4
+    coeffs_src, coeffs, means, viewmats, base, dirs, ids, out_shape = _make_sb_inputs(
+        N, C, M, batch_dims, packed
+    )
+
+    colors = spherical_beta(lobes_to_use, means, viewmats, base, coeffs, **ids)
+    _colors = _spherical_beta(lobes_to_use, dirs, base, coeffs)
+    assert colors.shape == out_shape, colors.shape
+    torch.testing.assert_close(colors, _colors, rtol=1e-4, atol=1e-4)
+
+    v_colors = torch.randn_like(colors)
+    # Take grads w.r.t. coeffs_src (the [N, M, 6] leaf) so packed mode also
+    # exercises the gather VJP that accumulates duplicate-id rows back to source.
+    inputs = (coeffs_src, means, viewmats, base)
+    grads = torch.autograd.grad(
+        (colors * v_colors).sum(), inputs, retain_graph=True, allow_unused=True
+    )
+    _grads = torch.autograd.grad(
+        (_colors * v_colors).sum(), inputs, retain_graph=True, allow_unused=True
+    )
+
+    # The base color is a pure pass-through, so its gradient is the incoming one.
+    torch.testing.assert_close(grads[3], v_colors)
+
+    for name, grad, _grad, ref in zip(
+        ("coeffs_src", "means", "viewmats", "base"), grads, _grads, inputs
+    ):
+        if lobes_to_use == 0 and name != "base":
+            # No lobes contribute, so the reference never touches these inputs.
+            assert grad is None or (grad == 0).all(), name
+            continue
+        assert grad.shape == ref.shape, (name, grad.shape)
+        assert_grad_reference_close(
+            grad,
+            _grad,
+            rtol=1e-4,
+            # atomicAdd accumulation over gaussians is non-deterministic, so
+            # small-magnitude entries can drift past a 1e-4 floor; the aggregate
+            # guards below keep the overall gradient tight.
+            atol=2e-3,
+            max_rel_l2=1e-3,
+            max_rel_l1=1e-3,
+            min_cosine=0.999999,
+            max_signed_bias=1e-3,
+            msg=f"v_{name}",
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sb_masks_pass_base_through():
+    """Masked-out elements must emit the base color untouched."""
+    from gsplat.cuda._wrapper import spherical_beta
+
+    torch.manual_seed(42)
+
+    N, C, M = 256, 2, 2
+    _, coeffs, means, viewmats, base, _, _, _ = _make_sb_inputs(N, C, M, (), False)
+    masks = torch.rand(C, N, device=device) > 0.5
+
+    masked = spherical_beta(M, means, viewmats, base, coeffs, masks=masks)
+    unmasked = spherical_beta(M, means, viewmats, base, coeffs)
+
+    torch.testing.assert_close(masked[~masks], base[~masks], rtol=0, atol=0)
+    torch.testing.assert_close(masked[masks], unmasked[masks], rtol=0, atol=0)
+    # non-vacuity: the mask must actually have changed something
+    assert (unmasked[~masks] != base[~masks]).any()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sb_inactive_lobes_are_inert():
+    """Lobes past `lobes_to_use` affect neither the color nor any gradient."""
+    from gsplat.cuda._wrapper import spherical_beta
+
+    torch.manual_seed(42)
+
+    N, C, M, active = 128, 2, 5, 2
+    _, coeffs, means, viewmats, base, _, _, _ = _make_sb_inputs(N, C, M, (), False)
+
+    colors = spherical_beta(active, means, viewmats, base, coeffs)
+    # Perturbing only the inactive lobes must not move the output.
+    perturbed = coeffs.detach().clone()
+    perturbed[:, active:] += torch.randn_like(perturbed[:, active:])
+    perturbed.requires_grad_(True)
+    torch.testing.assert_close(
+        spherical_beta(active, means, viewmats, base, perturbed), colors, rtol=0, atol=0
+    )
+
+    v_coeffs = torch.autograd.grad(colors.sum(), coeffs)[0]
+    assert v_coeffs.shape == coeffs.shape
+    torch.testing.assert_close(
+        v_coeffs[:, active:], torch.zeros_like(v_coeffs[:, active:])
+    )
+    # non-vacuity: the active lobes must carry real gradient
+    assert v_coeffs[:, :active].abs().max() > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sb_zero_amplitudes_match_base():
+    """Zero amplitudes leave the base color exactly unchanged, whatever the geometry."""
+    from gsplat.cuda._wrapper import spherical_beta
+
+    torch.manual_seed(42)
+
+    N, C, M = 128, 2, 3
+    _, coeffs, means, viewmats, base, _, _, _ = _make_sb_inputs(N, C, M, (), False)
+    coeffs = coeffs.detach().clone()
+    coeffs[..., :3] = 0.0
+
+    colors = spherical_beta(M, means, viewmats, base, coeffs)
+    torch.testing.assert_close(colors, base, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sb_rejects_bad_inputs():
+    from gsplat.cuda._wrapper import spherical_beta
+
+    N, C, M = 8, 1, 2
+    means = torch.randn(N, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    coeffs = torch.randn(N, M, 6, device=device)
+    base = torch.randn(C, N, 3, device=device)
+
+    with pytest.raises(RuntimeError, match="lobes_to_use must be between 0 and"):
+        spherical_beta(-1, means, viewmats, base, coeffs)
+    with pytest.raises(RuntimeError, match="lobes_to_use requires more lobes"):
+        spherical_beta(M + 1, means, viewmats, base, coeffs)
+    with pytest.raises(RuntimeError, match="coeffs last dim must be 6"):
+        spherical_beta(M, means, viewmats, base, torch.randn(N, M, 5, device=device))
+    with pytest.raises(RuntimeError, match="base_colors must have shape"):
+        spherical_beta(M, means, viewmats, torch.randn(C, N, 4, device=device), coeffs)
+
+
+@pytest.mark.parametrize("num_lobes", [1, 2, 4])
+def test_sb_ply_roundtrip(tmp_path, num_lobes: int):
+    """Spherical Beta lobes survive a PLY export/import unchanged."""
+    from gsplat.exporter import export_splats, load_ply_to_splats
+
+    torch.manual_seed(11)
+
+    N, K = 64, 16
+    sh0 = torch.randn(N, 1, 3)
+    shN = torch.randn(N, K - 1, 3)
+    sbN = torch.randn(N, num_lobes, 6)
+
+    path = str(tmp_path / "sb.ply")
+    export_splats(
+        means=torch.randn(N, 3),
+        scales=torch.randn(N, 3),
+        quats=torch.randn(N, 4),
+        opacities=torch.randn(N),
+        sh0=sh0,
+        shN=shN,
+        sbN=sbN,
+        format="ply",
+        save_to=path,
+    )
+
+    splats = load_ply_to_splats(path)
+    torch.testing.assert_close(splats["sbN"], sbN, rtol=0, atol=0)
+    # The lobes must not disturb the SH properties sharing the file.
+    torch.testing.assert_close(splats["sh0"], sh0, rtol=0, atol=0)
+    torch.testing.assert_close(splats["shN"], shN, rtol=0, atol=0)
+
+
+def test_sb_ply_layout_matches_reference_convention():
+    """Lobes are stored field-major, as the reference Beta Splatting PLY expects."""
+    from gsplat.exporter import sb_from_ply_layout, sb_to_ply_layout
+
+    N, M = 3, 2
+    sbN = torch.arange(N * M * 6, dtype=torch.float32).reshape(N, M, 6)
+
+    flat = sb_to_ply_layout(sbN)
+    assert flat.shape == (N, M * 6)
+    # sb_params_{f * M + m} holds field f of lobe m.
+    for f in range(6):
+        for m in range(M):
+            assert flat[:, f * M + m].tolist() == sbN[:, m, f].tolist()
+
+    torch.testing.assert_close(sb_from_ply_layout(flat, M), sbN, rtol=0, atol=0)
+
+
+def test_sb_ply_only_in_uncompressed_format():
+    """The fixed-layout formats reject lobes instead of silently dropping them."""
+    from gsplat.exporter import export_splats
+
+    N = 8
+    kwargs = dict(
+        means=torch.randn(N, 3),
+        scales=torch.randn(N, 3),
+        quats=torch.randn(N, 4),
+        opacities=torch.randn(N),
+        sh0=torch.randn(N, 1, 3),
+        shN=torch.randn(N, 3, 3),
+        sbN=torch.randn(N, 2, 6),
+    )
+    for fmt in ("splat", "ply_compressed"):
+        with pytest.raises(ValueError, match="only be exported to the 'ply' format"):
+            export_splats(**kwargs, format=fmt)
+
+
+def test_sb_ply_absent_when_not_requested():
+    """A PLY written without lobes stays byte-identical to the plain SH export."""
+    from gsplat.exporter import export_splats
+
+    torch.manual_seed(3)
+    N = 16
+    kwargs = dict(
+        means=torch.randn(N, 3),
+        scales=torch.randn(N, 3),
+        quats=torch.randn(N, 4),
+        opacities=torch.randn(N),
+        sh0=torch.randn(N, 1, 3),
+        shN=torch.randn(N, 3, 3),
+    )
+    assert export_splats(**kwargs, format="ply") == export_splats(
+        **kwargs, sbN=None, format="ply"
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("sh_degree", [None, 3])
+def test_rasterization_sb(packed: bool, sh_degree):
+    """Spherical Beta composes onto the rasterization appearance path."""
+    torch.manual_seed(7)
+
+    N, C, M = 800, 2, 2
+    means = torch.randn(N, 3, device=device) * 0.5
+    quats = torch.randn(N, 4, device=device)
+    scales = torch.rand(N, 3, device=device) * 0.05
+    opacities = torch.rand(N, device=device)
+    if sh_degree is None:
+        colors = torch.rand(N, 3, device=device)
+    else:
+        colors = torch.randn(N, (sh_degree + 1) ** 2, 3, device=device) * 0.3
+
+    viewmats = torch.eye(4, device=device).expand(C, 4, 4).clone()
+    viewmats[:, 2, 3] = 4.0
+    Ks = torch.tensor(
+        [[300.0, 0.0, 150.0], [0.0, 300.0, 100.0], [0.0, 0.0, 1.0]], device=device
+    )
+    Ks = Ks.expand(C, 3, 3).contiguous()
+    width, height = 300, 200
+
+    kwargs = dict(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=width,
+        height=height,
+        sh_degree=sh_degree,
+        packed=packed,
+    )
+
+    reference, ref_alphas, _ = gsplat.rasterization(**kwargs)
+
+    # Lobes with zero amplitude are a no-op, so the render must be unchanged.
+    sb = torch.zeros(N, M, 6, device=device)
+    sb[..., 3] = torch.rand(N, M, device=device) * math.pi
+    sb[..., 4] = torch.rand(N, M, device=device) * 2 * math.pi
+    inert, inert_alphas, _ = gsplat.rasterization(sb_params=sb, sb_number=M, **kwargs)
+    torch.testing.assert_close(inert, reference, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(inert_alphas, ref_alphas, rtol=1e-5, atol=1e-5)
+
+    # sb_number=0 must leave the existing path completely untouched.
+    disabled, _, _ = gsplat.rasterization(sb_params=sb, sb_number=0, **kwargs)
+    torch.testing.assert_close(disabled, reference, rtol=0, atol=0)
+
+    # Real lobes change the image and every input still receives a finite grad.
+    sb = sb.detach().clone()
+    sb[..., :3] = torch.rand(N, M, 3, device=device) * 0.5
+    leaves = [means, colors, sb, viewmats]
+    for leaf in leaves:
+        leaf.requires_grad_(True)
+    kwargs.update(means=means, colors=colors, viewmats=viewmats)
+    rendered, _, _ = gsplat.rasterization(sb_params=sb, sb_number=M, **kwargs)
+    assert (rendered - reference).abs().max() > 1e-3
+    for name, grad in zip(
+        ("means", "colors", "sb_params", "viewmats"),
+        torch.autograd.grad(rendered.square().mean(), leaves),
+    ):
+        assert grad is not None and torch.isfinite(grad).all(), name
+        assert grad.abs().max() > 0, name
+    for leaf in leaves:
+        leaf.requires_grad_(False)
+
+
 # ============================================================================
 # NaN/wrong-value safety tests for the 3DGUT code path
 # ============================================================================

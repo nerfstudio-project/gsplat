@@ -21,6 +21,35 @@ from typing import Literal, Optional
 import numpy as np
 import torch
 
+# PLY property prefix for Spherical Beta lobes. The name and the field-major
+# layout below match the reference Beta Splatting implementation
+# (https://github.com/RongLiu-Leo/beta-splatting). Note that the rest of the file
+# stays on the standard 3DGS schema, so the lobes alone are not enough to make
+# the two readers interchangeable: the reference also names its SH properties
+# sh0_*/shN_* rather than f_dc_*/f_rest_*, and requires a `beta` property for its
+# geometry kernel. Viewers that do not know the lobes ignore them and render the
+# diffuse base only.
+SB_PLY_PREFIX = "sb_params_"
+
+# Values stored per lobe, laid out as [r, g, b, theta, phi, beta].
+_SB_LOBE_WIDTH = 6
+
+
+def sb_to_ply_layout(sbN: torch.Tensor) -> torch.Tensor:
+    """Flatten Spherical Beta lobes ``(N, M, 6)`` into the PLY layout ``(N, 6*M)``.
+
+    The reference implementation stores the properties field-major, so
+    ``sb_params_{f * M + m}`` holds field ``f`` of lobe ``m``, not lobe-major.
+    """
+    if sbN.dim() != 3 or sbN.shape[-1] != _SB_LOBE_WIDTH:
+        raise ValueError(f"sbN must have shape (N, M, 6), got {tuple(sbN.shape)}")
+    return sbN.transpose(1, 2).reshape(sbN.shape[0], -1)
+
+
+def sb_from_ply_layout(flat: torch.Tensor, num_lobes: int) -> torch.Tensor:
+    """Inverse of :func:`sb_to_ply_layout`: ``(N, 6*M)`` back to ``(N, M, 6)``."""
+    return flat.reshape(flat.shape[0], _SB_LOBE_WIDTH, num_lobes).transpose(1, 2)
+
 
 def sh2rgb(sh: torch.Tensor) -> torch.Tensor:
     """Convert Sphere Harmonics to RGB
@@ -382,6 +411,7 @@ def splat2ply_bytes(
     opacities: torch.Tensor,
     sh0: torch.Tensor,
     shN: torch.Tensor,
+    sbN: Optional[torch.Tensor] = None,
 ) -> bytes:
     """Return the binary Ply file. Supported by almost all viewers.
 
@@ -392,6 +422,9 @@ def splat2ply_bytes(
         opacities (torch.Tensor): Splat opacities. Shape (N,)
         sh0 (torch.Tensor): Spherical harmonics. Shape (N, 3)
         shN (torch.Tensor): Spherical harmonics. Shape (N, K*3)
+        sbN (torch.Tensor): Pre-activation Spherical Beta lobes, already flattened
+            to the field-major PLY layout by :func:`sb_to_ply_layout`.
+            Shape (N, M*6). Optional.
 
     Returns:
         bytes: Binary Ply file representing the model.
@@ -411,6 +444,9 @@ def splat2ply_bytes(
         prefix = "f_dc" if i == 0 else "f_rest"
         for j in range(data.shape[1]):
             buffer.write(f"property float {prefix}_{j}\n".encode())
+    if sbN is not None:
+        for j in range(sbN.shape[1]):
+            buffer.write(f"property float {SB_PLY_PREFIX}{j}\n".encode())
     buffer.write(b"property float opacity\n")
     for i in range(scales.shape[1]):
         buffer.write(f"property float scale_{i}\n".encode())
@@ -419,9 +455,11 @@ def splat2ply_bytes(
     buffer.write(b"end_header\n")
 
     # Concatenate all tensors in the correct order
-    splat_data = torch.cat(
-        [means, sh0, shN, opacities.unsqueeze(1), scales, quats], dim=1
-    )
+    tensors = [means, sh0, shN]
+    if sbN is not None:
+        tensors.append(sbN)
+    tensors += [opacities.unsqueeze(1), scales, quats]
+    splat_data = torch.cat(tensors, dim=1)
     # Ensure correct dtype
     splat_data = splat_data.to(torch.float32)
 
@@ -458,6 +496,8 @@ def load_ply_to_splats(path: str) -> dict:
             - ``shN``: ``(N, K-1, 3)`` higher-order SH coefficients
               (basis-major). Empty along dim 1 when the file only stores
               the DC term (SH degree 0).
+            - ``sbN``: ``(N, M, 6)`` pre-activation Spherical Beta lobes. Only
+              present when the file carries ``sb_params_*`` properties.
     """
     try:
         from plyfile import PlyData
@@ -520,7 +560,7 @@ def load_ply_to_splats(path: str) -> dict:
     )
     quats = np.stack([np.asarray(vertex[name]) for name in rot_names], axis=1)
 
-    return {
+    splats = {
         "means": torch.from_numpy(np.ascontiguousarray(means)).float(),
         "scales": torch.from_numpy(np.ascontiguousarray(scales)).float(),
         "quats": torch.from_numpy(np.ascontiguousarray(quats)).float(),
@@ -528,6 +568,24 @@ def load_ply_to_splats(path: str) -> dict:
         "sh0": torch.from_numpy(np.ascontiguousarray(sh0[:, None, :])).float(),
         "shN": torch.from_numpy(np.ascontiguousarray(f_rest)).float(),
     }
+
+    sb_names = sorted(
+        (p.name for p in vertex.properties if p.name.startswith(SB_PLY_PREFIX)),
+        key=lambda s: int(s.split("_")[-1]),
+    )
+    if sb_names:
+        if len(sb_names) % _SB_LOBE_WIDTH != 0:
+            raise ValueError(
+                f"{SB_PLY_PREFIX} property count ({len(sb_names)}) is not a "
+                f"multiple of {_SB_LOBE_WIDTH}; cannot reshape Spherical Beta lobes."
+            )
+        sb_flat = np.stack([np.asarray(vertex[name]) for name in sb_names], axis=1)
+        splats["sbN"] = sb_from_ply_layout(
+            torch.from_numpy(np.ascontiguousarray(sb_flat)).float(),
+            len(sb_names) // _SB_LOBE_WIDTH,
+        ).contiguous()
+
+    return splats
 
 
 def splat2splat_bytes(
@@ -594,6 +652,8 @@ def export_splats(
     shN: torch.Tensor,
     format: Literal["ply", "splat", "ply_compressed"] = "ply",
     save_to: Optional[str] = None,
+    # Trails `save_to` so that existing positional calls keep working.
+    sbN: Optional[torch.Tensor] = None,
 ) -> bytes:
     """Export a Gaussian Splats model to bytes.
     The three supported formats are:
@@ -608,6 +668,9 @@ def export_splats(
         opacities (torch.Tensor): Splat opacities. Shape (N,)
         sh0 (torch.Tensor): Spherical harmonics. Shape (N, 1, 3)
         shN (torch.Tensor): Spherical harmonics. Shape (N, K, 3)
+        sbN (torch.Tensor): Pre-activation Spherical Beta lobes. Shape (N, M, 6).
+            Optional, and only supported by the "ply" format: the other two have
+            fixed binary layouts with no room for extra per-splat attributes.
         format (str): Export format. Options: "ply", "splat", "ply_compressed". Default: "ply"
         save_to (str): Output file path. If provided, the bytes will be written to file.
     """
@@ -620,10 +683,24 @@ def export_splats(
     assert (
         shN.ndim == 3 and shN.shape[0] == total_splats and shN.shape[2] == 3
     ), f"shN must be of shape (N, K, 3), got {shN.shape}"
+    if sbN is not None:
+        assert (
+            sbN.ndim == 3
+            and sbN.shape[0] == total_splats
+            and sbN.shape[2] == _SB_LOBE_WIDTH
+        ), f"sbN must be of shape (N, M, {_SB_LOBE_WIDTH}), got {sbN.shape}"
+        if format != "ply":
+            raise ValueError(
+                f"Spherical Beta lobes can only be exported to the 'ply' format, "
+                f"got '{format}'. The 'splat' and 'ply_compressed' formats use "
+                f"fixed binary layouts with no room for extra attributes."
+            )
 
     # Reshape spherical harmonics
     sh0 = sh0.squeeze(1)  # Shape (N, 3)
     shN = shN.permute(0, 2, 1).reshape(means.shape[0], -1)  # Shape (N, K * 3)
+    if sbN is not None:
+        sbN = sb_to_ply_layout(sbN)  # Shape (N, M * 6)
 
     # Check for NaN or Inf values
     invalid_mask = (
@@ -640,6 +717,10 @@ def export_splats(
         | torch.isnan(shN).any(dim=1)
         | torch.isinf(shN).any(dim=1)
     )
+    if sbN is not None:
+        invalid_mask = (
+            invalid_mask | torch.isnan(sbN).any(dim=1) | torch.isinf(sbN).any(dim=1)
+        )
 
     # Filter out invalid entries
     valid_mask = ~invalid_mask
@@ -649,9 +730,11 @@ def export_splats(
     opacities = opacities[valid_mask]
     sh0 = sh0[valid_mask]
     shN = shN[valid_mask]
+    if sbN is not None:
+        sbN = sbN[valid_mask]
 
     if format == "ply":
-        data = splat2ply_bytes(means, scales, quats, opacities, sh0, shN)
+        data = splat2ply_bytes(means, scales, quats, opacities, sh0, shN, sbN)
     elif format == "splat":
         data = splat2splat_bytes(means, scales, quats, opacities, sh0)
     elif format == "ply_compressed":

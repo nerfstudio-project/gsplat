@@ -22,6 +22,8 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
+import math
+
 import pytest
 import torch
 import gsplat
@@ -162,6 +164,92 @@ def test_strategy_requires_grad():
     for k, v in params.items():
         assert v.requires_grad == requires_grad_map[k]
     assert_consistent_sizes(params)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("strategy_name", ["default", "mcmc"])
+@pytest.mark.parametrize("sh_degree", [None, 1])
+def test_strategy_with_spherical_beta(strategy_name: str, sh_degree):
+    """Spherical Beta lobes survive densification under either strategy.
+
+    `sbN` is [N, M, 6] rather than [N, D], so this guards the assumption that
+    the densification ops index every parameter generically along dim 0.
+    """
+    from gsplat.rendering import rasterization
+    from gsplat.strategy import DefaultStrategy, MCMCStrategy
+
+    torch.manual_seed(42)
+
+    N, M = 200, 2
+    sb = torch.zeros(N, M, 6)
+    sb[..., :3] = torch.rand(N, M, 3) * 0.5
+    sb[..., 3] = torch.rand(N, M) * math.pi
+    sb[..., 4] = torch.rand(N, M) * 2 * math.pi
+    params = torch.nn.ParameterDict(
+        {
+            "means": torch.randn(N, 3),
+            "scales": torch.rand(N, 3),
+            "quats": torch.randn(N, 4),
+            "opacities": torch.rand(N),
+            "colors": (
+                torch.rand(N, 3)
+                if sh_degree is None
+                else torch.randn(N, (sh_degree + 1) ** 2, 3) * 0.3
+            ),
+            "sbN": sb,
+        }
+    ).to(device)
+    optimizers = {k: torch.optim.Adam([v], lr=1e-3) for k, v in params.items()}
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    viewmats[:, 2, 3] = 4.0
+    Ks = torch.tensor(
+        [[60.0, 0.0, 30.0], [0.0, 60.0, 30.0], [0.0, 0.0, 1.0]], device=device
+    ).unsqueeze(0)
+
+    render_colors, _, info = rasterization(
+        means=params["means"],
+        quats=params["quats"],
+        scales=torch.exp(params["scales"]),
+        opacities=torch.sigmoid(params["opacities"]),
+        colors=params["colors"],
+        viewmats=viewmats,
+        Ks=Ks,
+        width=60,
+        height=60,
+        sh_degree=sh_degree,
+        sb_params=params["sbN"],
+        sb_number=M,
+        packed=False,
+    )
+
+    if strategy_name == "default":
+        strategy = DefaultStrategy()
+        step_kwargs = {}
+    else:
+        strategy = MCMCStrategy(cap_max=2 * N)
+        step_kwargs = {"lr": 1e-3}
+    strategy.check_sanity(params, optimizers)
+    state = strategy.initialize_state()
+    strategy.step_pre_backward(params, optimizers, state, step=600, info=info)
+    render_colors.mean().backward()
+    assert params["sbN"].grad is not None
+    assert params["sbN"].grad.abs().max() > 0
+
+    # step 600 lands inside the refinement window of both strategies, so this
+    # call actually grows or relocates rather than being a no-op.
+    strategy.step_post_backward(
+        params, optimizers, state, step=600, info=info, **step_kwargs
+    )
+
+    counts = {k: v.shape[0] for k, v in params.items()}
+    assert len(set(counts.values())) == 1, counts
+    assert params["sbN"].shape[1:] == (M, 6), params["sbN"].shape
+    if strategy_name == "default":
+        assert counts["sbN"] > N, "DefaultStrategy should have densified"
+    # The optimizer state must be resized in lockstep or the next step throws.
+    optimizers["sbN"].step()
 
 
 if __name__ == "__main__":

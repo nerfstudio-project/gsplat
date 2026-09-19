@@ -49,6 +49,7 @@ from .cuda._wrapper import (
     rasterize_to_pixels_eval3d_extra,
     renderer_config_mixed_batch,
     renderer_config_parallel_batch,
+    spherical_beta,
     spherical_harmonics,
 )
 from .utils import depth_to_normal, get_projection_matrix
@@ -229,6 +230,51 @@ def _resolve_tile_size(
     return 16
 
 
+def _evaluate_appearance_with_sb(
+    sb_number: int,
+    sb_params: Tensor,  # [N, M, 6]
+    colors: Tensor,  # [..., (C,) N, 3] or [N, K, 3]
+    sh_degree: Optional[int],
+    means: Tensor,  # [..., N, 3]
+    viewmats: Tensor,  # [..., C, 4, 4]
+    viewmats_rs: Optional[Tensor],
+) -> Tensor:
+    """Compose the diffuse base color with Spherical Beta specular lobes.
+
+    Returns post-activation colors ``[..., C, N, 3]``, so the caller renders them
+    with ``sh_degree=None``. The base is either the evaluated SH color (with the
+    usual ``+0.5`` bias and clamp) or already-post-activation colors.
+    """
+    batch_dims = means.shape[:-2]
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+
+    if sh_degree is None:
+        if colors.shape[-1] != 3:
+            raise ValueError(
+                f"sb_number requires 3-channel colors, got {colors.shape[-1]}"
+            )
+        if colors.dim() == len(batch_dims) + 2:
+            # Turn [..., N, 3] into [..., C, N, 3]
+            base = torch.broadcast_to(
+                colors[..., None, :, :], batch_dims + (C, N, 3)
+            ).contiguous()
+        else:
+            base = colors
+    else:
+        base = spherical_harmonics(
+            sh_degree, means, viewmats, colors, viewmats_rs=viewmats_rs
+        )  # [..., C, N, 3]
+        # Match the SH color contract of the rasterization op, which clamps
+        # after the +0.5 color bias.
+        base = torch.clamp_min(base + 0.5, 0.0)
+
+    colors = spherical_beta(
+        sb_number, means, viewmats, base, sb_params, viewmats_rs=viewmats_rs
+    )
+    return torch.clamp_min(colors, 0.0)
+
+
 @trace_function("render")
 @capture_inputs(envvar="GSPLAT_INPUT_CAPTURE_RASTERIZATION")
 def rasterization(
@@ -287,6 +333,9 @@ def rasterization(
         int
     ] = None,  # Currently only None or 3 is accepted.
     renderer_config: Optional[RendererConfig] = None,
+    # spherical beta (view-dependent specular lobes, independent of sh_degree)
+    sb_params: Optional[Tensor] = None,  # [N, M, 6]
+    sb_number: Optional[int] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -319,6 +368,18 @@ def rasterization(
         where K is the number of SH bases and D is the number of feature channels. In this case, it is expected
         that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
         activated bases in the SH coefficients.
+
+    .. note::
+        **Spherical Beta**: Setting `sb_number` adds `sb_number` view-dependent specular
+        lobes on top of the base color, as in `Deformable Beta Splatting
+        <https://arxiv.org/abs/2501.18630>`_ by Liu et al. (`project page
+        <https://rongliu-leo.github.io/beta-splatting/>`_). Each lobe costs 6 values
+        per Gaussian and models sharp, localized highlights that low-order SH cannot.
+        This is independent of `sh_degree`, so the two may be combined freely:
+        `sh_degree=0, sb_number=0` is purely diffuse, `sh_degree=3, sb_number=0` is
+        plain SH, `sh_degree=0, sb_number=2` is the Beta Splatting configuration, and
+        setting both models low- and high-frequency view dependence together.
+        See :func:`gsplat.spherical_beta`.
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
@@ -483,6 +544,11 @@ def rasterization(
             :class:`RendererConfig_MixedBatch`, which uses the existing mixed-batch
             rasterizer implementation. Non-default configs require
             ``with_eval3d=True``.
+        sb_params: Spherical Beta lobe parameters ``[N, M, 6]``, each lobe stored
+            as ``[r, g, b, theta, phi, beta]`` with post-activation amplitudes.
+            Default is None.
+        sb_number: Number of leading lobes in `sb_params` to evaluate. Default is
+            None, which disables Spherical Beta.
 
     Returns:
         A tuple:
@@ -524,6 +590,30 @@ def rasterization(
 
     """
     has_color = render_mode_has_color(render_mode)
+
+    # Spherical Beta is composed here rather than inside the rasterization op:
+    # the C++ path fuses SH evaluation into the projection kernel and has no seam
+    # for a second appearance model, so when lobes are active the whole appearance
+    # is evaluated up front and handed down as post-activation colors.
+    if sb_number:
+        if not has_color:
+            raise ValueError(
+                f"sb_number requires a color render_mode, got {render_mode}"
+            )
+        if sb_params is None:
+            raise ValueError("sb_number requires sb_params")
+        if colors is None:
+            raise ValueError("sb_number requires colors as the diffuse base")
+        if distributed:
+            # The op gathers cameras across ranks internally, so a Python-side
+            # evaluation would only see this rank's cameras.
+            raise NotImplementedError(
+                "Spherical Beta is not supported with distributed=True"
+            )
+        colors = _evaluate_appearance_with_sb(
+            sb_number, sb_params, colors, sh_degree, means, viewmats, viewmats_rs
+        )
+        sh_degree = None
 
     external_distortion_coeffs = cast(
         Optional[BivariateWindshieldModelParameters], external_distortion_coeffs

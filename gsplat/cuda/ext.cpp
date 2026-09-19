@@ -53,6 +53,7 @@ void register_rasterization_privateuseone_impl(torch::Library &m);
 void register_relocation_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_privateuseone_impl(torch::Library &m);
+void register_spherical_beta_cuda_impl(torch::Library &m);
 } // namespace gsplat
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
@@ -1013,6 +1014,15 @@ TORCH_LIBRARY(gsplat, m)
         "Tensor?)"
     );
     m.def(
+        "spherical_beta(int lobes_to_use, Tensor means, Tensor viewmats, Tensor base_colors, Tensor coeffs, Tensor? "
+        "masks, Tensor? batch_ids, Tensor? camera_ids, Tensor? gaussian_ids, Tensor? viewmats_rs=None) -> Tensor"
+    );
+    m.def(
+        "spherical_beta_bwd(int lobes_to_use, Tensor means, Tensor viewmats, Tensor coeffs, Tensor? masks, Tensor? "
+        "batch_ids, Tensor? camera_ids, Tensor? gaussian_ids, Tensor? viewmats_rs, Tensor v_colors, bool "
+        "compute_v_means, bool compute_v_viewmats, bool compute_v_viewmats_rs) -> (Tensor, Tensor?, Tensor?, Tensor?)"
+    );
+    m.def(
         "assemble_proj_features_unpacked_fwd(int degrees_to_use, int B, int C, int N, int Dc, int E, int color_post, "
         "int extra_post, bool has_depth, bool depth_is_zero, bool extra_has_c, Tensor means, Tensor viewmats, Tensor? "
         "viewmats_rs, Tensor coeffs, Tensor? extra, Tensor? depths, Tensor? masks, Tensor(a!) out, Tensor(b!)? "
@@ -1289,6 +1299,7 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m)
 
     gsplat::register_intersect_cuda_impl(m);
     gsplat::register_spherical_harmonics_cuda_impl(m);
+    gsplat::register_spherical_beta_cuda_impl(m);
     gsplat::register_projection_cuda_impl(m);
     gsplat::register_rasterization_cuda_impl(m);
     gsplat::register_rendering_cuda_impl(m);

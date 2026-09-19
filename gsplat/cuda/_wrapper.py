@@ -99,6 +99,7 @@ def _ensure_autograd_registrations() -> None:
     _register_autograd(RegisterSphericalHarmonics)
     _register_autograd(RegisterSphericalHarmonicsL0)
     _register_autograd(RegisterSphericalHarmonicsL1Plus)
+    _register_autograd(RegisterSphericalBeta)
     _register_autograd(RegisterQuatScaleToCovarPreci)
     _register_autograd(RegisterProjectionEWASimple)
     _register_autograd(RegisterProjectionEWA3DGSFused)
@@ -652,6 +653,171 @@ class RegisterSphericalHarmonicsL1Plus(RegisterSphericalHarmonics):
     """Python autograd hooks for the l>=1 SH op."""
 
     base = "spherical_harmonics_l1_plus"
+
+
+@trace_function("sb-fwd")
+def spherical_beta(
+    lobes_to_use: int,
+    means: Tensor,  # [..., N, 3]
+    viewmats: Tensor,  # [..., C, 4, 4]
+    base_colors: Tensor,  # [..., C, N, 3] or [nnz, 3]
+    coeffs: Tensor,  # [N, M, 6]
+    masks: Optional[Tensor] = None,  # [..., C, N] or [nnz]
+    batch_ids: Optional[Tensor] = None,  # [nnz]
+    camera_ids: Optional[Tensor] = None,  # [nnz]
+    gaussian_ids: Optional[Tensor] = None,  # [nnz]
+    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+) -> Tensor:
+    """Adds Spherical Beta lobes to a base color.
+
+    Implements the Spherical Beta color model from the paper:
+
+    `Deformable Beta Splatting <https://arxiv.org/abs/2501.18630>`_ (SIGGRAPH 2025),
+    by Rong Liu, Dylan Sun, Meida Chen, Yue Wang and Andrew Feng. See the
+    `project page <https://rongliu-leo.github.io/beta-splatting/>`_ and the
+    `reference implementation <https://github.com/RongLiu-Leo/beta-splatting>`_.
+
+    Spherical Beta models view-dependent appearance as a sum of bounded,
+    Phong-like specular lobes on top of a diffuse base color::
+
+        c(V) = c0 + sum_m rgb_m * max(R_m . V, 0) ** (4 * exp(beta_m))
+
+    where ``R_m`` is the unit lobe axis built from the spherical angles
+    ``(theta_m, phi_m)``. The sharpness is stored in log space so it stays
+    positive. Because a lobe reaches exactly zero at the horizon it needs no
+    truncation, unlike a spherical Gaussian.
+
+    This is an alternative to the l>=1 spherical harmonic bands and costs
+    ``6 * M`` values per Gaussian rather than ``3 * ((degree + 1) ** 2 - 1)``.
+    The two are independent and may be combined; ``base_colors`` is typically
+    the evaluated SH color.
+
+    The ``rgb`` amplitudes are expected post-activation, matching the convention
+    for opacities and scales elsewhere in gsplat. The reference model applies
+    ``softplus(x, beta=10 * ln(2))``.
+
+    Unlike spherical harmonics this op models color only, so the channel count
+    is fixed at 3: a lobe's angular parameters are shared across channels.
+
+    Elements excluded by ``masks`` pass ``base_colors`` through unchanged.
+
+    The camera position is recovered from each view matrix as ``-R^T t``, with
+    the same orthonormality caveats as :func:`spherical_harmonics`.
+
+    Args:
+        lobes_to_use: Number of leading lobes to evaluate. Lobes beyond this
+            count are ignored, which allows a warmup schedule over ``M``.
+        means: World-space Gaussian means. ``[..., N, 3]``.
+        viewmats: Rigid world-to-camera matrices with orthonormal rotation
+            blocks. ``[..., C, 4, 4]``.
+        base_colors: Diffuse base color the lobes are added to, already
+            broadcast to one row per output element. ``[..., C, N, 3]`` in
+            dense mode or ``[nnz, 3]`` in packed mode.
+        coeffs: Lobe parameters ``[r, g, b, theta, phi, beta]``. ``[N, M, 6]``
+            in dense mode or ``[nnz, M, 6]`` in packed mode.
+        masks: Optional boolean masks. ``[..., C, N]`` or ``[nnz]``.
+        batch_ids: Batch indices in packed mode.
+        camera_ids: Camera indices in packed mode.
+        gaussian_ids: Gaussian indices in packed mode.
+        viewmats_rs: Optional rolling-shutter endpoint matrices. When provided,
+            the camera position is averaged across both endpoints.
+
+    Returns:
+        Base color plus lobes. ``[..., C, N, 3]`` or ``[nnz, 3]``.
+    """
+    if masks is not None:
+        masks = masks.contiguous()
+    return _make_lazy_cuda_func("spherical_beta")(
+        lobes_to_use,
+        means.contiguous(),
+        viewmats.contiguous(),
+        base_colors.contiguous(),
+        coeffs.contiguous(),
+        masks,
+        None if batch_ids is None else batch_ids.contiguous(),
+        None if camera_ids is None else camera_ids.contiguous(),
+        None if gaussian_ids is None else gaussian_ids.contiguous(),
+        None if viewmats_rs is None else viewmats_rs.contiguous(),
+    )
+
+
+class RegisterSphericalBeta:
+    """Python autograd hooks for the gsplat::spherical_beta op."""
+
+    base = "spherical_beta"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            lobes_to_use,
+            means,
+            viewmats,
+            _base_colors,
+            coeffs,
+            masks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            viewmats_rs,
+        ) = inputs
+        ctx.lobes_to_use = lobes_to_use
+        # The lobes are added to the base color, so its gradient is the incoming
+        # one and the base color itself is not needed for backward.
+        ctx.save_for_backward(
+            means,
+            viewmats,
+            coeffs,
+            masks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            viewmats_rs,
+        )
+
+    @classmethod
+    def backward(cls, ctx, v_colors: Tensor):
+        (
+            means,
+            viewmats,
+            coeffs,
+            masks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            viewmats_rs,
+        ) = ctx.saved_tensors
+        v_coeffs, v_means, v_viewmats, v_viewmats_rs = _make_lazy_cuda_func(
+            f"{cls.base}_bwd"
+        )(
+            ctx.lobes_to_use,
+            means,
+            viewmats,
+            coeffs,
+            masks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            viewmats_rs,
+            v_colors,
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[2],
+            # PyTorch omits trailing schema-default arguments from
+            # needs_input_grad, even though setup_context receives them after
+            # fill_defaults(). viewmats_rs is therefore absent when it is None.
+            len(ctx.needs_input_grad) > 9 and ctx.needs_input_grad[9],
+        )
+        return (
+            None,  # lobes_to_use
+            v_means,
+            v_viewmats,
+            v_colors if ctx.needs_input_grad[3] else None,  # base_colors
+            v_coeffs,
+            None,  # masks
+            None,  # batch_ids
+            None,  # camera_ids
+            None,  # gaussian_ids
+            v_viewmats_rs,
+        )
 
 
 def quat_scale_to_covar_preci(

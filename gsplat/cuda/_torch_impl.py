@@ -1065,3 +1065,34 @@ def _spherical_harmonics(
     bases = coeffs.new_zeros(dirs.shape[:-1] + (K,))
     bases[..., :num_bases] = _eval_sh_bases_fast(num_bases, dirs)
     return (bases[..., None] * coeffs).sum(dim=-2)
+
+
+def _spherical_beta(
+    lobes_to_use: int,
+    dirs: torch.Tensor,  # [..., N, 3]
+    base_colors: torch.Tensor,  # [..., N, 3]
+    coeffs: torch.Tensor,  # [N, M, 6]
+):
+    """Pytorch implementation of `gsplat.cuda._wrapper.spherical_beta()`."""
+    assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
+    assert coeffs.dim() == 3 and coeffs.shape[-1] == 6, coeffs.shape
+    assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
+    assert lobes_to_use <= coeffs.shape[-2], coeffs.shape
+    if lobes_to_use == 0:
+        return base_colors
+    dirs = F.normalize(dirs, p=2, dim=-1)
+    amplitudes, theta, phi, beta = coeffs[:, :lobes_to_use].split([3, 1, 1, 1], dim=-1)
+    sin_theta, cos_theta = torch.sin(theta), torch.cos(theta)
+    axes = torch.cat(
+        [sin_theta * torch.cos(phi), sin_theta * torch.sin(phi), cos_theta], dim=-1
+    )  # [N, M, 3]
+    dot = (dirs[..., None, :] * axes).sum(dim=-1)  # [..., N, M]
+    # A lobe only covers the hemisphere facing its axis. Substituting 1 outside
+    # that hemisphere keeps the unused branch of the pow (and its gradient)
+    # finite for sharpnesses below one, where pow is singular at zero.
+    facing = dot > 0
+    safe_dot = torch.where(facing, dot, torch.ones_like(dot))
+    weights = torch.where(
+        facing, safe_dot ** (4.0 * torch.exp(beta[..., 0])), torch.zeros_like(dot)
+    )
+    return base_colors + (weights[..., None] * amplitudes).sum(dim=-2)

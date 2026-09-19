@@ -167,6 +167,10 @@ class Config:
     sh_fp16: bool = False
     # Turn on another SH degree every this steps
     sh_degree_interval: int = 1000
+    # Number of Spherical Beta lobes modeling view-dependent specular highlights.
+    # Independent of `sh_degree`, so the two combine freely: (3, 0) is plain SH,
+    # (0, 2) is the Beta Splatting setting, (0, 0) is purely diffuse.
+    sb_number: int = 0
     # Initial opacity of GS
     init_opa: float = 0.1
     # Initial scale of GS
@@ -207,6 +211,8 @@ class Config:
     sh0_lr: float = 2.5e-3
     # LR for higher-order SH (detail)
     shN_lr: float = 2.5e-3 / 20
+    # LR for Spherical Beta lobes (amplitude, direction and sharpness share it)
+    sbN_lr: float = 2.5e-3
 
     # Opacity regularization
     opacity_reg: float = 0.0
@@ -302,8 +308,10 @@ def create_splats_with_optimizers(
     quats_lr: float = 1e-3,
     sh0_lr: float = 2.5e-3,
     shN_lr: float = 2.5e-3 / 20,
+    sbN_lr: float = 2.5e-3,
     scene_scale: float = 1.0,
     sh_degree: int = 3,
+    sb_number: int = 0,
     sparse_grad: bool = False,
     visible_adam: bool = False,
     batch_size: int = 1,
@@ -355,6 +363,15 @@ def create_splats_with_optimizers(
         params.append(("features", torch.nn.Parameter(features), sh0_lr))
         colors = torch.logit(rgbs)  # [N, 3]
         params.append(("colors", torch.nn.Parameter(colors), sh0_lr))
+
+    if sb_number > 0:
+        # Spherical Beta lobes, each [r, g, b, theta, phi, beta]. Zero amplitudes
+        # start just above zero once the softplus is applied, zero sharpness gives
+        # an exponent of 4, and the axes are spread uniformly over the sphere.
+        sb = torch.zeros((N, sb_number, 6))  # [N, M, 6]
+        sb[..., 3] = torch.rand(N, sb_number) * math.pi
+        sb[..., 4] = torch.rand(N, sb_number) * 2 * math.pi
+        params.append(("sbN", torch.nn.Parameter(sb), sbN_lr))
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
@@ -494,8 +511,10 @@ class Runner:
             quats_lr=cfg.quats_lr,
             sh0_lr=cfg.sh0_lr,
             shN_lr=cfg.shN_lr,
+            sbN_lr=cfg.sbN_lr,
             scene_scale=self.scene_scale,
             sh_degree=cfg.sh_degree,
+            sb_number=cfg.sb_number,
             sparse_grad=cfg.sparse_grad,
             visible_adam=cfg.visible_adam,
             batch_size=cfg.batch_size,
@@ -694,6 +713,18 @@ class Runner:
             else:
                 colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
 
+        sb_params = None
+        if self.cfg.sb_number > 0:
+            # Only the amplitudes are activated; the angles and the log-space
+            # sharpness are consumed raw.
+            sb_params = torch.cat(
+                [
+                    F.softplus(splats["sbN"][..., :3], beta=math.log(2) * 10),
+                    splats["sbN"][..., 3:],
+                ],
+                dim=-1,
+            )  # [N, M, 6]
+
         if rasterize_mode is None:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         if camera_model is None:
@@ -751,6 +782,8 @@ class Runner:
             radial_coeffs=radial_coeffs,
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
+            sb_params=sb_params,
+            sb_number=self.cfg.sb_number,
             **kwargs,
         )
         if masks is not None:
@@ -1099,6 +1132,10 @@ class Runner:
                     sh0 = self.splats["sh0"]
                     shN = self.splats["shN"]
 
+                # Lobes ride along as extra PLY properties; viewers that do not
+                # know them fall back to the diffuse base.
+                sbN = self.splats["sbN"] if cfg.sb_number > 0 else None
+
                 means = self.splats["means"]
                 scales = self.splats["scales"]
                 quats = self.splats["quats"]
@@ -1110,6 +1147,7 @@ class Runner:
                     opacities=opacities,
                     sh0=sh0,
                     shN=shN,
+                    sbN=sbN,
                     format="ply",
                     save_to=f"{self.ply_dir}/point_cloud_{step}.ply",
                 )
