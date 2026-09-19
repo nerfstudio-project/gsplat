@@ -36,12 +36,12 @@ void merge_streams()
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
-        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[device_id], cudaEventDisableTiming));
         C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
     }
 
     C10_CUDA_CHECK(cudaSetDevice(merge_device_id));
-    C10_CUDA_CHECK(cudaEventCreate(&merge_event, cudaEventDisableTiming));
+    C10_CUDA_CHECK(cudaEventCreateWithFlags(&merge_event, cudaEventDisableTiming));
     auto merge_stream = c10::cuda::getCurrentCUDAStream(merge_device_id);
     for(const auto device_id: c10::irange(c10::cuda::device_count()))
     {
