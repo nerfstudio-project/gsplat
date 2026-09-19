@@ -18,6 +18,10 @@
 The op is reached only through the MCMC densification strategy, which the rest
 of the suite does not exercise, so this gives it direct runtime coverage: that
 it runs end to end and returns finite, correctly-shaped tensors.
+
+The all-ratios and end-to-end relocation tests also guard against a CUDA
+fast-math regression where pow(-1.0f, k) can return NaN for integer k on some
+GPU architectures, corrupting relocated scales before the next render step.
 """
 
 import math
@@ -26,6 +30,7 @@ import pytest
 import torch
 
 from gsplat.relocation import compute_relocation
+from gsplat.strategy.ops import relocate
 
 device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -121,3 +126,84 @@ def test_compute_relocation_min_opacity_clamps_before_scale():
     torch.testing.assert_close(new_scales.cpu(), ref_scales, rtol=1e-5, atol=1e-6)
     assert torch.all(new_opacities[:2] >= min_opacity)
     assert torch.all(new_opacities[:2] <= min_opacity + 1e-8)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="relocation is a CUDA op")
+def test_compute_relocation_all_ratios_match_reference():
+    """Cover every MCMC ratio, including the fast-math sign regression."""
+    n_max = 51
+    binoms = _binomial_table(n_max, device)
+    ratios = torch.arange(1, n_max + 1, device=device, dtype=torch.float32)
+    opacities = torch.linspace(0.05, 0.95, n_max, device=device, dtype=torch.float32)
+    scales = torch.linspace(
+        0.1, 1.6, n_max * 3, device=device, dtype=torch.float32
+    ).reshape(n_max, 3)
+
+    new_opacities, new_scales = compute_relocation(
+        opacities, scales, ratios, binoms, min_opacity=0.005
+    )
+    ref_opacities, ref_scales = _reference_relocation(
+        opacities, scales, ratios, binoms, 0.005
+    )
+
+    assert torch.isfinite(new_opacities).all()
+    assert torch.isfinite(new_scales).all()
+    torch.testing.assert_close(new_opacities.cpu(), ref_opacities, rtol=1e-6, atol=1e-7)
+    torch.testing.assert_close(new_scales.cpu(), ref_scales, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="relocation is a CUDA op")
+def test_relocate_many_duplicates_preserves_optimizer_state():
+    """Exercise kernel output plus Parameter and optimizer-state writeback."""
+    torch.manual_seed(0)
+    n_points = 512
+    n_alive = 4
+    min_opacity = 0.005
+
+    opacity_values = torch.full((n_points,), 1e-3, device=device, dtype=torch.float32)
+    opacity_values[-n_alive:] = 0.5
+
+    params = torch.nn.ParameterDict(
+        {
+            "means": torch.nn.Parameter(torch.randn(n_points, 3, device=device)),
+            "scales": torch.nn.Parameter(
+                torch.log(torch.rand(n_points, 3, device=device) + 0.1)
+            ),
+            "quats": torch.nn.Parameter(torch.randn(n_points, 4, device=device)),
+            "opacities": torch.nn.Parameter(torch.logit(opacity_values)),
+        }
+    )
+    optimizers = {
+        name: torch.optim.Adam([parameter], lr=1e-3)
+        for name, parameter in params.items()
+    }
+    # Adam creates its moment tensors lazily. Take a real step so relocation
+    # must move and update populated optimizer state, not just empty dicts.
+    for name, parameter in params.items():
+        parameter.grad = torch.full_like(parameter, 0.1)
+        optimizers[name].step()
+        optimizers[name].zero_grad(set_to_none=True)
+    original_params = dict(params.items())
+    dead_mask = opacity_values <= min_opacity
+
+    relocate(
+        params=params,
+        optimizers=optimizers,
+        state={},
+        mask=dead_mask,
+        binoms=_binomial_table(51, device),
+        min_opacity=min_opacity,
+    )
+
+    for name, parameter in params.items():
+        assert torch.isfinite(parameter).all()
+        optimizer = optimizers[name]
+        assert optimizer.param_groups[0]["params"][0] is parameter
+        assert original_params[name] not in optimizer.state
+        assert parameter in optimizer.state
+        for key in ("exp_avg", "exp_avg_sq"):
+            moment = optimizer.state[parameter][key]
+            assert moment.shape == parameter.shape
+            assert torch.isfinite(moment).all()
+            assert torch.all(moment[:-n_alive] != 0)
+            assert torch.any(moment[-n_alive:] == 0)
