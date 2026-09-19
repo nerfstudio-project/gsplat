@@ -35,7 +35,8 @@ except ImportError:
         _C = build_and_load_gsplat()
     else:
         Console().print(
-            "[yellow]gsplat: No CUDA toolkit found. gsplat will be disabled.[/yellow]"
+            "[yellow]gsplat: No CUDA or ROCm toolkit found. "
+            "gsplat will be disabled.[/yellow]"
         )
 
 __all__ = ["_C"]
