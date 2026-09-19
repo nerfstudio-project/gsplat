@@ -101,6 +101,29 @@ def _persp_proj(
     ).reshape(batch_dims + (C, N, 2, 3))
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
+    # Orientation-preserving clamp: keep the box-clamped covariance's size spectrum
+    # (cov2d above) on the unclamped (correct) eigenvectors. No-op in-frustum.
+    mx, my = means[..., 0], means[..., 1]
+    J_unclamped = torch.stack(
+        [fx / tz, O, -fx * mx / tz2, O, fy / tz, -fy * my / tz2], dim=-1
+    ).reshape(batch_dims + (C, N, 2, 3))
+    cov_true = torch.einsum(
+        "...ij,...jk,...kl->...il", J_unclamped, covars, J_unclamped.transpose(-1, -2)
+    )
+    a = cov2d[..., 0, 0]
+    b = cov2d[..., 0, 1]
+    c = cov2d[..., 1, 1]
+    at = cov_true[..., 0, 0]
+    bt = cov_true[..., 0, 1]
+    ct = cov_true[..., 1, 1]
+    Rb = torch.sqrt(torch.clamp(0.25 * (a - c) ** 2 + b * b, min=0.0))
+    Rt = torch.sqrt(torch.clamp(0.25 * (at - ct) ** 2 + bt * bt, min=0.0)).clamp(
+        min=1e-12
+    )
+    alpha = Rb / Rt
+    beta = 0.5 * (a + c) - alpha * 0.5 * (at + ct)
+    eye2 = torch.eye(2, device=means.device, dtype=means.dtype)
+    cov2d = alpha[..., None, None] * cov_true + beta[..., None, None] * eye2
     means2d = torch.einsum(
         "...ij,...nj->...ni", Ks[..., :2, :3], means
     )  # [..., C, N, 2]
