@@ -57,7 +57,8 @@ namespace
         const at::optional<at::Tensor> &camera_ids,
         const at::optional<at::Tensor> &gaussian_ids,
         const at::optional<at::Tensor> &viewmats_rs = c10::nullopt,
-        bool omit_l0                                = false
+        bool omit_l0                                = false,
+        int64_t packed_coeff_batch_stride           = -1
     )
     {
         check_spherical_harmonics_degree(degrees_to_use);
@@ -73,7 +74,33 @@ namespace
         );
         TORCH_CHECK(means.scalar_type() == at::kFloat, "means must be float32");
         TORCH_CHECK(viewmats.scalar_type() == at::kFloat, "viewmats must be float32");
-        TORCH_CHECK(coeffs.dim() == 3, "coeffs must have shape [N, K, D] or [nnz, K, D], got ", coeffs.sizes());
+        const bool packed = batch_ids.has_value() || camera_ids.has_value() || gaussian_ids.has_value();
+        TORCH_CHECK(
+            !packed || (batch_ids.has_value() && camera_ids.has_value() && gaussian_ids.has_value()),
+            "batch_ids, camera_ids, and gaussian_ids must either all be provided or all be None"
+        );
+        const bool packed_direct = packed_coeff_batch_stride >= 0;
+        TORCH_CHECK(!packed_direct || packed, "packed direct coefficients require packed ID tensors");
+        if(packed_direct)
+        {
+            const int64_t batch_ndim = means.dim() - 2;
+            const int64_t N          = means.size(-2);
+            const bool shared_sh     = packed_coeff_batch_stride == 0 && coeffs.dim() == 3 && coeffs.size(0) == N;
+            const bool per_batch_sh  = packed_coeff_batch_stride == N
+                                    && batch_ndim > 0
+                                    && coeffs.dim() == means.dim() + 1
+                                    && coeffs.sizes().slice(0, batch_ndim) == means.sizes().slice(0, batch_ndim)
+                                    && coeffs.size(batch_ndim) == N;
+            TORCH_CHECK(
+                shared_sh || per_batch_sh,
+                "direct packed coeffs must have shape [N, K, D] or [..., N, K, D], got ",
+                coeffs.sizes()
+            );
+        }
+        else
+        {
+            TORCH_CHECK(coeffs.dim() == 3, "coeffs must have shape [N, K, D] or [nnz, K, D], got ", coeffs.sizes());
+        }
         TORCH_CHECK(coeffs.size(-1) >= 1, "coeffs last dim D must be >= 1, got ", coeffs.size(-1));
         TORCH_CHECK(
             (degrees_to_use + 1) * (degrees_to_use + 1) - (omit_l0 ? 1 : 0) <= coeffs.size(-2),
@@ -82,14 +109,9 @@ namespace
             ", coeffs shape ",
             coeffs.sizes()
         );
-        const bool packed = batch_ids.has_value() || camera_ids.has_value() || gaussian_ids.has_value();
-        TORCH_CHECK(
-            !packed || (batch_ids.has_value() && camera_ids.has_value() && gaussian_ids.has_value()),
-            "batch_ids, camera_ids, and gaussian_ids must either all be provided or all be None"
-        );
         if(packed)
         {
-            const int64_t nnz = coeffs.size(0);
+            const int64_t nnz = packed_direct ? batch_ids.value().numel() : coeffs.size(0);
             for(const auto &ids: {batch_ids.value(), camera_ids.value(), gaussian_ids.value()})
             {
                 TORCH_CHECK(ids.dim() == 1 && ids.numel() == nnz, "packed ID tensors must have shape [nnz]");
@@ -244,11 +266,38 @@ SphericalHarmonicsFwdResult spherical_harmonics_fwd(
     at::Tensor colors = at::empty(out_shape, means.options());
 
     launch_spherical_harmonics_fwd_kernel(
-        degrees_to_use, means, viewmats, viewmats_rs, coeffs, masks, batch_ids, camera_ids, gaussian_ids, colors
+        degrees_to_use, means, viewmats, viewmats_rs, coeffs, masks, batch_ids, camera_ids, gaussian_ids, -1, colors
     );
     return SphericalHarmonicsFwdResult{
         .colors = colors,
     };
+}
+
+at::Tensor spherical_harmonics_packed_direct(
+    int64_t degrees_to_use,
+    const at::Tensor &means,
+    const at::Tensor &viewmats,
+    const at::Tensor &coeffs,
+    const at::Tensor &masks,
+    const at::Tensor &batch_ids,
+    const at::Tensor &camera_ids,
+    const at::Tensor &gaussian_ids,
+    const at::optional<at::Tensor> &viewmats_rs
+)
+{
+    DEVICE_GUARD(means);
+    TORCH_CHECK(means.is_cuda(), "spherical_harmonics_packed_direct requires CUDA tensors");
+    const int64_t N      = means.size(-2);
+    const int64_t stride = coeffs.dim() == 3 ? 0 : N;
+    check_spherical_harmonics_inputs(
+        degrees_to_use, means, viewmats, coeffs, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs, false, stride
+    );
+
+    at::Tensor colors = at::empty({batch_ids.numel(), coeffs.size(-1)}, means.options());
+    launch_spherical_harmonics_fwd_kernel(
+        degrees_to_use, means, viewmats, viewmats_rs, coeffs, masks, batch_ids, camera_ids, gaussian_ids, stride, colors
+    );
+    return colors;
 }
 
 at::Tensor spherical_harmonics_l0_fwd(const at::Tensor &sh0)

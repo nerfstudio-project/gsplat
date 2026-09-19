@@ -18,6 +18,7 @@
 #include <ATen/Functions.h>
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
+#include <ATen/core/grad_mode.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/torch.h>
 #include <algorithm>
@@ -447,9 +448,15 @@ namespace
             const at::Tensor &colors_tensor = colors.value();
             if(sh_degree >= 0)
             {
+                const bool shared_sh    = colors_tensor.dim() == 3 && colors_tensor.size(0) == N;
+                const bool per_batch_sh = batch_ndim > 0
+                                       && colors_tensor.dim() == batch_ndim + 3
+                                       && colors_tensor.sizes().slice(0, batch_ndim) == batch_shape
+                                       && colors_tensor.size(batch_ndim) == N;
+                TORCH_CHECK(!per_batch_sh || packed, "Per-batch SH colors require packed=True");
                 TORCH_CHECK(
-                    colors_tensor.dim() == 3 && colors_tensor.size(0) == N,
-                    "SH colors must have shape [N, K, D], got ",
+                    shared_sh || per_batch_sh,
+                    "SH colors must have shape [N, K, D] or [..., N, K, D] with packed=True, got ",
                     colors_tensor.sizes()
                 );
                 TORCH_CHECK(
@@ -477,9 +484,15 @@ namespace
             const at::Tensor &extra_tensor = extra_signals.value();
             if(extra_signals_sh_degree >= 0)
             {
+                const bool shared_sh    = extra_tensor.dim() == 3 && extra_tensor.size(0) == N;
+                const bool per_batch_sh = batch_ndim > 0
+                                       && extra_tensor.dim() == batch_ndim + 3
+                                       && extra_tensor.sizes().slice(0, batch_ndim) == batch_shape
+                                       && extra_tensor.size(batch_ndim) == N;
+                TORCH_CHECK(!per_batch_sh || packed, "Per-batch SH extra_signals require packed=True");
                 TORCH_CHECK(
-                    extra_tensor.dim() == 3 && extra_tensor.size(0) == N,
-                    "SH extra_signals must have shape [N, K, D], got ",
+                    shared_sh || per_batch_sh,
+                    "SH extra_signals must have shape [N, K, D] or [..., N, K, D] with packed=True, got ",
                     extra_tensor.sizes()
                 );
                 TORCH_CHECK(
@@ -627,18 +640,43 @@ namespace
         bool clamp_after_bias
     )
     {
-        at::Tensor coeffs_for_visible = gaussian_ids.has_value() ? coeffs.index({gaussian_ids.value()}) : coeffs;
-        at::Tensor values             = spherical_harmonics(
-            degree,
-            means,
-            viewmats,
-            coeffs_for_visible,
-            valid_gaussians,
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            viewmats_rs
-        );
+        at::Tensor values;
+        if(gaussian_ids.has_value() && means.is_cuda() && !at::GradMode::is_enabled())
+        {
+            values = spherical_harmonics_packed_direct(
+                degree,
+                means,
+                viewmats,
+                coeffs,
+                valid_gaussians,
+                batch_ids.value(),
+                camera_ids.value(),
+                gaussian_ids.value(),
+                viewmats_rs
+            );
+        }
+        else
+        {
+            at::Tensor coeffs_for_visible = coeffs;
+            if(gaussian_ids.has_value())
+            {
+                const int64_t N = means.size(-2);
+                const at::Tensor coeff_ids
+                    = coeffs.dim() > 3 ? batch_ids.value() * N + gaussian_ids.value() : gaussian_ids.value();
+                coeffs_for_visible = coeffs.view({-1, coeffs.size(-2), coeffs.size(-1)}).index({coeff_ids});
+            }
+            values = spherical_harmonics(
+                degree,
+                means,
+                viewmats,
+                coeffs_for_visible,
+                valid_gaussians,
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+                viewmats_rs
+            );
+        }
         values = values + 0.5;
         return clamp_after_bias ? at::clamp_min(values, 0.0) : values;
     }
