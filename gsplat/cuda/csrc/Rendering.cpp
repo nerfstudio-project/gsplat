@@ -131,6 +131,7 @@ namespace
         ShutterType rolling_shutter,
         bool global_z_order,
         bool use_hit_distance,
+        bool use_median_hit_distance,
         bool return_normals,
         bool distributed
     )
@@ -273,6 +274,10 @@ namespace
             );
         }
         TORCH_CHECK(!use_hit_distance || with_eval3d, "hit-distance render modes require with_eval3d=True");
+        TORCH_CHECK(
+            !use_median_hit_distance || (is_lidar_camera && with_eval3d && use_hit_distance),
+            "median hit distance requires LiDAR Eval3D hit-distance rendering"
+        );
         TORCH_CHECK(!return_normals || with_eval3d, "return_normals=True requires with_eval3d=True");
         TORCH_CHECK(!sparse_grad || packed, "sparse_grad is only supported when packed is True");
         TORCH_CHECK(!sparse_grad || means.dim() == 2, "sparse_grad does not support batch dimensions");
@@ -790,7 +795,8 @@ Rasterization3DGSResult rasterization_3dgs(
     bool return_normals,
     int64_t renderer_config,
     const at::optional<std::string> &process_group_name,
-    int64_t world_size
+    int64_t world_size,
+    bool use_median_hit_distance
 )
 {
     DEVICE_GUARD(means);
@@ -837,6 +843,7 @@ Rasterization3DGSResult rasterization_3dgs(
         rolling_shutter,
         global_z_order,
         use_hit_distance,
+        use_median_hit_distance,
         return_normals,
         distributed
     );
@@ -1354,6 +1361,9 @@ Rasterization3DGSResult rasterization_3dgs(
     {
         const int64_t end         = std::min(start + channel_chunk, channels);
         at::Tensor features_chunk = channel_chunk_or_contiguous(projected_features, start, end);
+        const bool chunk_uses_hit_distance
+            = use_hit_distance && (!use_median_hit_distance || end == channels);
+        const bool chunk_uses_median_hit_distance = use_median_hit_distance && end == channels;
         at::optional<at::Tensor> backgrounds_chunk;
         if(render_backgrounds.has_value())
         {
@@ -1390,11 +1400,12 @@ Rasterization3DGSResult rasterization_3dgs(
                 raster_isect_offsets,
                 raster_flatten_ids,
                 false, // return_sample_counts
-                use_hit_distance,
+                chunk_uses_hit_distance,
                 return_normals && start == 0,
                 renderer_config,
                 false, // return_last_ids
-                false  // unsafe_masked_tile_outputs (safe default: masked tiles write defined outputs)
+                false, // unsafe_masked_tile_outputs (safe default: masked tiles write defined outputs)
+                chunk_uses_median_hit_distance
             );
             render_color_chunks.push_back(raster.renders);
             if(!render_alphas.defined())
@@ -1459,7 +1470,7 @@ Rasterization3DGSResult rasterization_3dgs(
         render_alphas,
         extra_signals.has_value(),
         append_depth,
-        expected_depth,
+        expected_depth && !use_median_hit_distance,
         primary_channels,
         extra_signal_channels
     );

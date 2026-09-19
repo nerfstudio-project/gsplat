@@ -662,6 +662,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
     const int32_t batch_offset,
     const uint32_t batch_size,
     const scalar_t *__restrict__ colors,
+    const bool use_median_hit_distance,
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
     const vec3 (&ray_d)[PIXELS_PER_THREAD_T],
     const uint32_t ALL_DONE,
@@ -747,8 +748,24 @@ __device__ __forceinline__ void process_fetch_round_blend(
 #pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
-                    const float value  = (k == CDIM - 1) ? hit_distance : c_ptr[k];
-                    pix_out[p][k]     += value * vis;
+                    if(k == CDIM - 1)
+                    {
+                        if(use_median_hit_distance)
+                        {
+                            if(T[p] > 0.5f && next_T <= 0.5f)
+                            {
+                                pix_out[p][k] = hit_distance;
+                            }
+                        }
+                        else
+                        {
+                            pix_out[p][k] += hit_distance * vis;
+                        }
+                    }
+                    else
+                    {
+                        pix_out[p][k] += c_ptr[k] * vis;
+                    }
                 }
             }
             else
@@ -820,6 +837,7 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     const vec3 *__restrict__ scales,
     const scalar_t *__restrict__ opacities,
     const scalar_t *__restrict__ colors,
+    const bool use_median_hit_distance,
     const uint32_t C,
     const uint32_t N,
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
@@ -902,6 +920,7 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
           batch_offset,
           batch_size,
           colors,
+          use_median_hit_distance,
           ray_o,
           ray_d,
           ALL_DONE,
