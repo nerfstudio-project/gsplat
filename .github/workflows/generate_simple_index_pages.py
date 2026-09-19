@@ -13,66 +13,67 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import requests
-import os
 import argparse
-from jinja2 import Template
+import os
 import re
+from urllib.parse import urlparse
 
-# Automatically get the repository name in the format "owner/repo" from the GitHub workflow environment
+import requests
+from jinja2 import Environment, select_autoescape
+
 GITHUB_REPO = os.getenv("GITHUB_REPOSITORY")
 
 
-def list_python_wheels():
-    # GitHub API URL for releases
-    releases_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+def is_safe_https_url(url):
+    parsed = urlparse(url)
+    return parsed.scheme == "https" and bool(parsed.netloc)
 
-    response = requests.get(releases_url)
+
+def list_python_wheels():
+    releases_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+    response = requests.get(releases_url, timeout=30)
 
     if response.status_code != 200:
         raise Exception(
             f"Failed to fetch releases: {response.status_code} {response.text}"
         )
 
-    releases = response.json()
-
     wheel_files = []
 
-    # Iterate through releases and assets
-    for release in releases:
-        assets = release.get("assets", [])
-        for asset in assets:
+    for release in response.json():
+        for asset in release.get("assets", []):
             filename = asset["name"]
-            if filename.endswith(".whl"):
-                pattern = r"^(?P<name>[\w\d_.]+)-(?P<version>[\d.]+)(?P<local>\+[\w\d.]+)?-(?P<python_tag>[\w]+)-(?P<abi_tag>[\w]+)-(?P<platform_tag>[\w]+)\.whl"
 
-                match = re.match(pattern, filename)
+            if not filename.endswith(".whl"):
+                continue
 
-                if match:
-                    local_version = match.group("local")
-                    if local_version:
-                        local_version = local_version.lstrip(
-                            "+"
-                        )  # Return the local version without the '+' sign
-                    else:
-                        local_version = None
-                else:
-                    raise ValueError(f"Invalid wheel filename: {filename}")
-                wheel_files.append(
-                    {
-                        "release_name": release["name"],
-                        "wheel_name": asset["name"],
-                        "download_url": asset["browser_download_url"],
-                        "package_name": match.group("name"),
-                        "local_version": local_version,
-                    }
-                )
+            pattern = r"^(?P<name>[\w\d_.]+)-(?P<version>[\d.]+)(?P<local>\+[\w\d.]+)?-(?P<python_tag>[\w]+)-(?P<abi_tag>[\w]+)-(?P<platform_tag>[\w]+)\.whl$"
+            match = re.match(pattern, filename)
+
+            if not match:
+                raise ValueError(f"Invalid wheel filename: {filename}")
+
+            download_url = asset["browser_download_url"]
+            if not is_safe_https_url(download_url):
+                raise ValueError(f"Invalid download URL: {download_url}")
+
+            local_version = match.group("local")
+            local_version = local_version.lstrip("+") if local_version else None
+
+            wheel_files.append(
+                {
+                    "release_name": release["name"],
+                    "wheel_name": filename,
+                    "download_url": download_url,
+                    "package_name": match.group("name"),
+                    "local_version": local_version,
+                }
+            )
 
     return wheel_files
 
 
 def generate_simple_index_htmls(wheels, outdir):
-    # Jinja2 template as a string
     template_versions_str = """
     <!DOCTYPE html>
     <html>
@@ -89,71 +90,72 @@ def generate_simple_index_htmls(wheels, outdir):
     """
 
     template_packages_str = """
+    <!DOCTYPE html>
     <html>
     <body>
     {% for package_name in package_names %}
-        <a href="{{package_name}}/">{{package_name}}</a><br/>
+        <a href="{{ package_name }}/">{{ package_name }}</a><br/>
     {% endfor %}
     </body>
     </html>
     """
 
-    # Create a Jinja2 Template object from the string
-    template_versions = Template(template_versions_str)
-    template_packages = Template(template_packages_str)
+    env = Environment(autoescape=select_autoescape(["html", "xml"]))
 
-    # group the wheels by package name
+    template_versions = env.from_string(template_versions_str)
+    template_packages = env.from_string(template_packages_str)
+
     packages = {}
     for wheel in wheels:
         package_name = wheel["package_name"]
-        if package_name not in packages:
-            packages[package_name] = []
-        packages[package_name].append(wheel)
+        packages.setdefault(package_name, []).append(wheel)
 
-    # Render the HTML the list the package names
     html_content = template_packages.render(
         package_names=[str(k) for k in packages.keys()]
     )
+
     os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "index.html"), "w") as file:
+    with open(os.path.join(outdir, "index.html"), "w", encoding="utf-8") as file:
         file.write(html_content)
 
-    # for each package, render the HTML to list the wheels
-    for package_name, wheels in packages.items():
-        html_page = template_versions.render(repo_name=GITHUB_REPO, wheels=wheels)
-        os.makedirs(os.path.join(outdir, package_name), exist_ok=True)
-        with open(os.path.join(outdir, package_name, "index.html"), "w") as file:
+    for package_name, package_wheels in packages.items():
+        html_page = template_versions.render(
+            repo_name=GITHUB_REPO,
+            wheels=package_wheels,
+        )
+        package_dir = os.path.join(outdir, package_name)
+        os.makedirs(package_dir, exist_ok=True)
+
+        with open(os.path.join(package_dir, "index.html"), "w", encoding="utf-8") as file:
             file.write(html_page)
 
 
-def generate_all_pages():
+def generate_all_pages(args):
     wheels = list_python_wheels()
+
     if wheels:
         print("Python Wheels found in releases:")
         for wheel in wheels:
             print(
-                f"Release: {wheel['release_name']}, Wheel: {wheel['wheel_name']}, URL: {wheel['download_url']}"
+                f"Release: {wheel['release_name']}, "
+                f"Wheel: {wheel['wheel_name']}, "
+                f"URL: {wheel['download_url']}"
             )
     else:
         print("No Python wheels found in the releases.")
 
-    # Generate Simple Index HTML pages the wheel with all local versions
     generate_simple_index_htmls(wheels, outdir=args.outdir)
 
-    # group wheels per local version
     wheels_per_local_version = {}
     for wheel in wheels:
         local_version = wheel["local_version"]
-        if local_version is not None and local_version not in wheels_per_local_version:
-            wheels_per_local_version[local_version] = []
-        wheels_per_local_version[local_version].append(wheel)
+        if local_version is not None:
+            wheels_per_local_version.setdefault(local_version, []).append(wheel)
 
-    # create a subdirectory for each local version
-    for local_version, wheels in wheels_per_local_version.items():
-        os.makedirs(os.path.join(args.outdir, local_version), exist_ok=True)
-        generate_simple_index_htmls(
-            wheels, outdir=os.path.join(args.outdir, local_version)
-        )
+    for local_version, local_wheels in wheels_per_local_version.items():
+        local_outdir = os.path.join(args.outdir, local_version)
+        os.makedirs(local_outdir, exist_ok=True)
+        generate_simple_index_htmls(local_wheels, outdir=local_outdir)
 
 
 if __name__ == "__main__":
@@ -161,7 +163,9 @@ if __name__ == "__main__":
         description="Generate Python Wheels Index Pages"
     )
     argparser.add_argument(
-        "--outdir", help="Output directory for the index pages", default="."
+        "--outdir",
+        help="Output directory for the index pages",
+        default=".",
     )
     args = argparser.parse_args()
-    generate_all_pages()
+    generate_all_pages(args)
