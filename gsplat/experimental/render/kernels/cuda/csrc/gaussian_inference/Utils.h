@@ -28,21 +28,21 @@ __device__ __forceinline__ void AssignAs(U &u, const V &v)
 }
 
 // Round-to-nearest (ties away from zero) __half2 pair to the M bits of mantissa
-template<uint M, bool MASK_OUT_OUTPUT = true>
+template<unsigned int M, bool MASK_OUT_OUTPUT = true>
 __device__ __forceinline__ __half2 RoundToNearest(const __half2 &v)
 {
-    constexpr uint MANTISSA_MASK = 0x03FF03FF;
-    constexpr uint TRUNC_MASK    = ~(((1u << (10 - M)) - 1) * 0x10001u);
+    constexpr unsigned int MANTISSA_MASK = 0x03FF03FF;
+    constexpr unsigned int TRUNC_MASK    = ~(((1u << (10 - M)) - 1) * 0x10001u);
     // get rounding offset scale s*2^e (input float with mantissa zeroed out)
-    const uint vn                = reinterpret_cast<const uint &>(v) & ~MANTISSA_MASK;
+    const unsigned int vn                = reinterpret_cast<const unsigned int &>(v) & ~MANTISSA_MASK;
     const __half2 vb             = reinterpret_cast<const __half2 &>(vn);
     // get rounding offset
     const __half2 vs             = __float2half2_rn((1 << (10 - M)) / 2048.0f);
     // add to float a scaled rounding offset
     const __half2 v_r            = __hfma2(vb, vs, v);
     // return masked __half2
-    const uint vi_r
-        = MASK_OUT_OUTPUT ? (reinterpret_cast<const uint &>(v_r) & TRUNC_MASK) : reinterpret_cast<const uint &>(v_r);
+    const unsigned int vi_r
+        = MASK_OUT_OUTPUT ? (reinterpret_cast<const unsigned int &>(v_r) & TRUNC_MASK) : reinterpret_cast<const unsigned int &>(v_r);
     return reinterpret_cast<const __half2 &>(vi_r);
 }
 
@@ -137,9 +137,9 @@ __forceinline__ __device__ __half2 __uint8x2_to_half2(uint32_t src)
     return dp.f;
 }
 
-__forceinline__ __device__ uint __cvt_pack_sat_u8_f32(float a0, float a1, float a2, float a3)
+__forceinline__ __device__ unsigned int __cvt_pack_sat_u8_f32(float a0, float a1, float a2, float a3)
 {
-    uint rval;
+    unsigned int rval;
     asm volatile(
         "{.reg .u32 tmp, i0, i1;\n"
         "cvt.rni.s32.f32 i0, %1;\n"
@@ -154,7 +154,7 @@ __forceinline__ __device__ uint __cvt_pack_sat_u8_f32(float a0, float a1, float 
     return rval;
 }
 
-__forceinline__ __device__ uint __cvt_pack_sat_u8_f32(const float4 &a)
+__forceinline__ __device__ unsigned int __cvt_pack_sat_u8_f32(const float4 &a)
 {
     return __cvt_pack_sat_u8_f32(a.x, a.y, a.z, a.w);
 }

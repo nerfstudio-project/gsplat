@@ -770,7 +770,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
 
     auto launch_kernel = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
+        static constexpr uint32_t CDIM = ChannelsT::value;
 
         int64_t shmem_size = tile_size
                            * tile_size

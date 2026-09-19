@@ -43,6 +43,18 @@
 #include "ExternalDistortion.cuh"
 #include "Utils.cuh"
 
+// CUDA 13 (CCCL 3.0) removed the device-side overloads that used to make
+// std::isfinite callable from device code; __finitef is the stable device
+// intrinsic across CUDA 11.8-13.x.
+inline __device__ bool gsplat_isfinite(float v)
+{
+#if defined(__CUDA_ARCH__)
+    return __finitef(v) != 0;
+#else
+    return std::isfinite(v) != 0;
+#endif
+}
+
 template<typename T, std::size_t N>
 __device__ std::array<T, N> make_array(const T *ptr)
 {
@@ -779,7 +791,7 @@ struct OrthographicCameraModel
         }
 
         const auto point = glm::fvec2{ray.x, ray.y} / ray.z;
-        if(!std::isfinite(point.x) || !std::isfinite(point.y))
+        if(!gsplat_isfinite(point.x) || !gsplat_isfinite(point.y))
         {
             return {
                 glm::fvec2{0.f, 0.f},

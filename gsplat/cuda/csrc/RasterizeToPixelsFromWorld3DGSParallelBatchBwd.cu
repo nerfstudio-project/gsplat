@@ -18,6 +18,12 @@
 
 #include "Config.h"
 
+#include <cub/device/device_radix_sort.cuh>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 #if GSPLAT_BUILD_3DGUT
 
 #    include <ATen/Dispatch.h>
@@ -187,7 +193,13 @@ namespace
         {
             return 0;
         }
+#if defined(_MSC_VER)
+        unsigned long leading_zero = 0;
+        _BitScanReverse64(&leading_zero, x - 1);
+        return 64u - static_cast<uint32_t>(leading_zero);
+#else
         return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
+#endif
     }
 } // namespace
 
@@ -231,16 +243,33 @@ at::Tensor compute_bid_to_slot(
     // Sort by `(batch_round, tile)` while carrying the original tile-major
     // slot as the value. The sorted values are the launch-index to slot
     // permutation; no extra scatter is needed.
-    at::cuda::cub::radix_sort_pairs<int64_t, int32_t>(
-        sort_keys.const_data_ptr<int64_t>(),
-        sorted_keys.data_ptr<int64_t>(),
-        sort_values.const_data_ptr<int32_t>(),
-        bid_to_slot.data_ptr<int32_t>(),
-        total_batches,
-        /*descending=*/false,
-        /*begin_bit=*/0,
-        /*end_bit=*/static_cast<int64_t>(total_bits == 0 ? 1u : total_bits)
-    );
+    // Sort by `(batch_round, tile)` while carrying the original tile-major
+    // slot as the value. The sorted values are the launch-index to slot
+    // permutation; no extra scatter is needed. CUB is called directly:
+    // at::cuda::cub::detail::radix_sort_pairs_impl is not exported from
+    // torch_cuda.dll on Windows, which breaks linking of this extension.
+    TORCH_CHECK(total_batches <= std::numeric_limits<int>::max(),
+                "too many batches for cub radix sort: ", total_batches);
+    const int num_items = static_cast<int>(total_batches);
+    const int begin_bit = 0;
+    const int end_bit   = static_cast<int>(total_bits == 0 ? 1u : total_bits);
+
+    size_t temp_storage_bytes = 0;
+    cudaError_t cub_err = cub::DeviceRadixSort::SortPairs(
+        nullptr, temp_storage_bytes,
+        sort_keys.const_data_ptr<int64_t>(), sorted_keys.data_ptr<int64_t>(),
+        sort_values.const_data_ptr<int32_t>(), bid_to_slot.data_ptr<int32_t>(),
+        num_items, begin_bit, end_bit, stream);
+    TORCH_CHECK(cub_err == cudaSuccess, "cub radix sort (query) failed: ", cudaGetErrorString(cub_err));
+
+    at::Tensor temp_storage = at::empty({static_cast<int64_t>(temp_storage_bytes)},
+                                        dummy_options.dtype(at::kByte));
+    cub_err = cub::DeviceRadixSort::SortPairs(
+        temp_storage.data_ptr(), temp_storage_bytes,
+        sort_keys.const_data_ptr<int64_t>(), sorted_keys.data_ptr<int64_t>(),
+        sort_values.const_data_ptr<int32_t>(), bid_to_slot.data_ptr<int32_t>(),
+        num_items, begin_bit, end_bit, stream);
+    TORCH_CHECK(cub_err == cudaSuccess, "cub radix sort failed: ", cudaGetErrorString(cub_err));
 
     return bid_to_slot;
 }
