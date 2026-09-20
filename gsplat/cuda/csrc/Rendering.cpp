@@ -1923,7 +1923,7 @@ Rasterization2DGSResult rasterization_2dgs(
         at::Tensor depth_for_normal
             = depth_mode_is_median ? render_median : render_colors.narrow(-1, render_colors.size(-1) - 1, 1);
         at::Tensor camtoworlds    = at::linalg_inv(viewmats);
-        render_normals_from_depth = depth_to_normal_2dgs(depth_for_normal, camtoworlds, Ks).squeeze(0);
+        render_normals_from_depth = depth_to_normal_2dgs(depth_for_normal, camtoworlds, Ks);
     }
 
     // Rotate the rendered (camera-space) normals into world space.

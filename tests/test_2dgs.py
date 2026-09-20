@@ -523,6 +523,50 @@ def test_rasterization_packed_2dgs(test_data, batch_dims: Tuple[int, ...]):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("batch_dims", [(), (1,)])
+@pytest.mark.parametrize("num_cameras", [1, 2])
+def test_rasterization_2dgs_surface_normals_shape(
+    packed: bool, batch_dims: Tuple[int, ...], num_cameras: int
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    N = 4
+    H = W = 32
+    device = torch.device("cuda")
+    means = torch.zeros(batch_dims + (N, 3), device=device)
+    means[..., 2] = 2.0
+    quats = torch.zeros(batch_dims + (N, 4), device=device)
+    quats[..., 0] = 1.0
+    scales = torch.full(batch_dims + (N, 3), 0.1, device=device)
+    opacities = torch.ones(batch_dims + (N,), device=device)
+    colors = torch.rand(batch_dims + (N, 3), device=device)
+    viewmats = torch.eye(4, device=device).expand(
+        batch_dims + (num_cameras, 4, 4)
+    )
+    Ks = torch.tensor(
+        [[W, 0.0, W / 2], [0.0, W, H / 2], [0.0, 0.0, 1.0]], device=device
+    ).expand(batch_dims + (num_cameras, 3, 3))
+
+    _, _, _, surf_normals, _, _, _ = rasterization_2dgs(
+        means,
+        quats,
+        scales,
+        opacities,
+        colors,
+        viewmats,
+        Ks,
+        W,
+        H,
+        render_mode="RGB+D",
+        packed=packed,
+    )
+
+    assert surf_normals.shape == batch_dims + (num_cameras, H, W, 3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 def test_rasterization_packed_2dgs_pose_grad_large_nnz():
     # compute_directions switches to a per-(batch, camera) Python loop when
     #   nnz / (B*C) > 10000 and viewmats.requires_grad
