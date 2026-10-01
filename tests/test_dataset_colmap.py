@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the optional image cache of ``examples/datasets/colmap.py``, as
-``examples/simple_trainer.py`` uses it with ``--cache_images``."""
+"""Tests for COLMAP image resizing and the optional image cache used by
+``examples/simple_trainer.py`` with ``--cache_images``."""
 
 import sys
 from pathlib import Path
@@ -21,7 +21,43 @@ _EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 if str(_EXAMPLES) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES))
 
-from datasets.colmap import Dataset  # noqa: E402
+from datasets.colmap import Dataset, _resize_image_folder  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "relative_path", ["frame.jpg", "cam0/frame.jpg", "session/cam0/frame.png"]
+)
+@pytest.mark.parametrize("factor", [1, 3])
+def test_resize_image_folder_preserves_relative_paths(tmp_path, relative_path, factor):
+    source_dir = tmp_path / "images"
+    source_path = source_dir / relative_path
+    source_path.parent.mkdir(parents=True)
+    imageio.imwrite(source_path, np.full((25, 31, 3), 127, dtype=np.uint8))
+    resized_dir = tmp_path / "resized"
+
+    result = _resize_image_folder(str(source_dir), str(resized_dir), factor)
+
+    assert result == str(resized_dir)
+    resized_path = resized_dir / Path(relative_path).with_suffix(".png")
+    expected = np.full((round(25 / factor), round(31 / factor), 3), 127, dtype=np.uint8)
+    np.testing.assert_array_equal(imageio.imread(resized_path), expected)
+    assert list(resized_dir.rglob("*.png")) == [resized_path]
+
+
+def test_resize_image_folder_skips_cached_images(tmp_path):
+    source_dir = tmp_path / "images"
+    source_dir.mkdir()
+    source_path = source_dir / "frame.jpg"
+    imageio.imwrite(source_path, np.full((25, 31, 3), 127, dtype=np.uint8))
+    resized_dir = tmp_path / "resized"
+    _resize_image_folder(str(source_dir), str(resized_dir), factor=3)
+    resized_path = resized_dir / "frame.png"
+    cached = resized_path.read_bytes()
+    source_path.write_bytes(b"not an image")
+
+    _resize_image_folder(str(source_dir), str(resized_dir), factor=3)
+
+    assert resized_path.read_bytes() == cached
 
 
 def _make_parser(root: Path, n_images: int = 12, height: int = 12, width: int = 16):

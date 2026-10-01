@@ -68,6 +68,7 @@ def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
         resized_image = np.array(
             Image.fromarray(image).resize(resized_size, Image.BICUBIC)
         )
+        os.makedirs(os.path.dirname(resized_path), exist_ok=True)
         imageio.imwrite(resized_path, resized_image)
     return resized_dir
 
