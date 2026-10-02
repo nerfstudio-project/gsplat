@@ -152,14 +152,13 @@ def duplicate(
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         mask: A boolean mask to duplicate the Gaussians.
     """
-    device = mask.device
     sel = torch.where(mask)[0]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         return torch.nn.Parameter(torch.cat([p, p[sel]]), requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        return torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
+        return torch.cat([v, v.new_zeros((len(sel), *v.shape[1:]))])
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
@@ -219,7 +218,7 @@ def split(
         return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
+        v_split = v.new_zeros((2 * len(sel), *v.shape[1:]))
         return torch.cat([v[rest], v_split])
 
     # update the parameters and the state in the optimizers
