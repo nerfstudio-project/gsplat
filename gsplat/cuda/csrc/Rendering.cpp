@@ -1608,7 +1608,11 @@ namespace
         TORCH_CHECK(
             scales.size(-2) == N && scales.size(-1) == 3, "scales must have shape [..., N, 3], got ", scales.sizes()
         );
-        TORCH_CHECK(opacities.size(-1) == N, "opacities must have shape [..., N], got ", opacities.sizes());
+        TORCH_CHECK(
+            opacities.dim() == means.dim() - 1 && opacities.size(-1) == N,
+            "opacities must have shape [..., N], got ",
+            opacities.sizes()
+        );
         TORCH_CHECK(
             viewmats.size(-2) == 4 && viewmats.size(-1) == 4,
             "viewmats must have shape [..., C, 4, 4], got ",
@@ -1886,7 +1890,9 @@ Rasterization2DGSResult rasterization_2dgs(
         means2d,
         ray_transforms,
         feature,
-        projected_opacities,
+        // Non-packed opacities are expand()ed across cameras, which is not
+        // contiguous for C > 1; the rasterizer requires contiguous inputs.
+        projected_opacities.contiguous(),
         normals,
         densify,
         raster_backgrounds,
