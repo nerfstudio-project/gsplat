@@ -1378,6 +1378,7 @@ def rasterization_2dgs(
     absgrad: bool = False,
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
+    compute_median: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
 
@@ -1427,6 +1428,10 @@ def rasterization_2dgs(
             will be done looply in chunks.
         distloss: If true, use distortion regularization to get better geometry detail.
         depth_mode: render depth mode. Choose from expected depth and median depth.
+        compute_median: Whether to compute `render_median` in color-only render modes
+            ("RGB"). These modes have no depth channel, so the median depth needs one
+            extra rasterized channel. When False, `render_median` is all zeros in those
+            modes. Render modes with a depth channel always compute it. Default is False.
 
     Returns:
         A tuple:
@@ -1446,6 +1451,7 @@ def rasterization_2dgs(
         L1 version, different from L2 version in 2DGS paper.
 
         **render_median**: The rendered median depth. [..., C, height, width, 1].
+        All zeros in color-only render modes unless `compute_median` is True.
 
         **meta**: A dictionary of intermediate results of the rasterization.
 
@@ -1529,6 +1535,7 @@ def rasterization_2dgs(
         sh_degree,
         render_mode,
         depth_mode,
+        compute_median,
     )
 
     if absgrad:

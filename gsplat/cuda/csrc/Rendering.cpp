@@ -29,6 +29,7 @@
 #include "Cameras.h"
 #include "Common.h"
 #include "Config.h"
+#include "Dispatch.h"
 #include "DistributedCollectives.h"
 #include "Intersect.h"
 #include "Projection.h"
@@ -1724,7 +1725,8 @@ Rasterization2DGSResult rasterization_2dgs(
     bool distloss,
     at::optional<int64_t> sh_degree,
     const std::string &render_mode,
-    const std::string &depth_mode
+    const std::string &depth_mode,
+    bool compute_median
 )
 {
     DEVICE_GUARD(means);
@@ -1862,8 +1864,29 @@ Rasterization2DGSResult rasterization_2dgs(
             feature = colors;
         }
     }
+    // The rasterizer reads the median depth (and routes its gradient) from the
+    // last feature channel. Color-only modes have no depth there, so when the
+    // caller asks for the median depth, append a hidden depth channel and strip
+    // it after rasterization; otherwise render_median is returned as zeros.
+    const bool color_only          = has_color && !append_depth;
+    const bool append_median_depth = color_only && compute_median;
+    if(append_median_depth)
+    {
+        const int64_t widened_channels = feature.size(-1) + 1;
+        // The channel list contains commas, so test it outside the macro.
+        const bool widened_supported   = dispatch::IntParam<GSPLAT_NUM_CHANNELS>::contains(widened_channels);
+        TORCH_CHECK_VALUE(
+            widened_supported,
+            "compute_median=True in render mode ",
+            render_mode,
+            " needs ",
+            widened_channels,
+            " color channels. To add support, rebuild gsplat with this channel count included in "
+            "-DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        );
+    }
     at::optional<at::Tensor> raster_backgrounds = backgrounds;
-    if(append_depth)
+    if(append_depth || append_median_depth)
     {
         if(has_color)
         {
@@ -1908,6 +1931,15 @@ Rasterization2DGSResult rasterization_2dgs(
     at::Tensor means2d_absgrad = raster.means2d_absgrad;
 
     // --- Post-process render-mode outputs ---------------------------------
+    if(append_median_depth)
+    {
+        render_colors = render_colors.narrow(-1, 0, render_colors.size(-1) - 1);
+    }
+    else if(color_only)
+    {
+        // Without a depth channel the rasterizer's median is a color value.
+        render_median = at::zeros_like(render_median);
+    }
     // Normalize the accumulated depth channel by alpha for expected-depth modes.
     if(expected_depth)
     {
