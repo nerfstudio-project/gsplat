@@ -85,8 +85,11 @@ def sort_centers(centers: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     lengths = max_vals - min_vals
     lengths[lengths == 0] = 1  # Prevent division by zero
 
-    # Normalize and scale to 10-bit integer range (0-1024)
-    scaled_centers = ((centers - min_vals) / lengths * 1024).floor().to(torch.int32)
+    # Keep the inclusive maximum in the last 10-bit cell instead of wrapping
+    # 1024 to zero when the Morton encoder masks off the upper bits.
+    scaled_centers = (
+        ((centers - min_vals) / lengths * 1024).floor().clamp(0, 1023).to(torch.int32)
+    )
 
     # Extract x, y, z coordinates
     x, y, z = scaled_centers[:, 0], scaled_centers[:, 1], scaled_centers[:, 2]
