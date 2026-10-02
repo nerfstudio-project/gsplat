@@ -29,6 +29,49 @@ import gsplat
 device = torch.device("cuda:0")
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("growth_op", ["duplicate", "split"])
+def test_growth_ops_preserve_optimizer_state_dtype(dtype, growth_op):
+    from gsplat.strategy import ops
+
+    p = torch.nn.Parameter(
+        torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=dtype)
+    )
+    params = {"colors": p}
+    if growth_op == "split":
+        params["scales"] = torch.nn.Parameter(torch.zeros(2, 3), requires_grad=False)
+        params["quats"] = torch.nn.Parameter(
+            torch.tensor([[1.0, 0.0, 0.0, 0.0]]).repeat(2, 1), requires_grad=False
+        )
+    optimizer = torch.optim.Adam([p], eps=1e-4)
+    p.square().sum().backward()
+    optimizer.step()
+    optimizer.zero_grad()
+    old_state = {
+        key: optimizer.state[p][key].clone() for key in ("exp_avg", "exp_avg_sq")
+    }
+
+    getattr(ops, growth_op)(
+        params, {"colors": optimizer}, {}, torch.tensor([True, False])
+    )
+    p = params["colors"]
+    assert p.dtype == dtype
+    assert p.device == old_state["exp_avg"].device
+    retained = [0, 1] if growth_op == "duplicate" else [1]
+    for key, previous in old_state.items():
+        current = optimizer.state[p][key]
+        assert current.dtype == previous.dtype
+        assert current.device == previous.device
+        torch.testing.assert_close(
+            current[: len(retained)], previous[retained], rtol=0, atol=0
+        )
+        assert torch.count_nonzero(current[len(retained) :]) == 0
+
+    p.square().sum().backward()
+    optimizer.step()
+    assert torch.isfinite(p).all()
+
+
 def test_mcmc_strategy_positional_constructor():
     from gsplat.strategy import MCMCStrategy
 
