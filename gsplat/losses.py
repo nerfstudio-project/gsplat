@@ -1018,7 +1018,9 @@ def reduce_mean(value: Tensor, mask: Tensor | None = None) -> Tensor:
             f"mask must be bool or integer dtype, got {mask.dtype}. "
             f"Convert to bool first (e.g. mask > 0)."
         )
-        return (value * mask).sum() / mask.sum().clamp(min=1)
+        mask = torch.broadcast_to(mask, value.shape)
+        masked_value = torch.where(mask != 0, value, torch.zeros_like(value))
+        return (masked_value * mask).sum() / mask.sum().clamp(min=1)
     return value.mean()
 
 
