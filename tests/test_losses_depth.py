@@ -139,6 +139,29 @@ def test_pearson_depth_loss_fully_masked_returns_zero_no_nan():
     assert torch.isfinite(loss).all()
 
 
+@pytest.mark.parametrize(
+    "mask",
+    [
+        pytest.param(torch.tensor([[True, False, True]]), id="1x3"),
+        pytest.param(torch.tensor([[True], [False]]), id="2x1"),
+        pytest.param(torch.tensor(True), id="scalar"),
+        pytest.param(torch.tensor([[False, False, False]]), id="all_zero"),
+    ],
+)
+def test_pearson_depth_loss_broadcast_mask_matches_expanded(mask):
+    pred = torch.arange(6.0).reshape(2, 3).requires_grad_(True)
+    reference = pred.detach().clone().requires_grad_(True)
+    gt = torch.tensor([[1.0, 3.0, 2.0], [4.0, 6.0, 5.0]])
+
+    loss = pearson_depth_loss(pred, gt, mask=mask)
+    expected = pearson_depth_loss(reference, gt, mask=mask.expand_as(reference))
+    torch.testing.assert_close(loss, expected)
+
+    loss.backward()
+    expected.backward()
+    torch.testing.assert_close(pred.grad, reference.grad)
+
+
 # ---------------------------------------------------------------------------
 # masked_l1
 # ---------------------------------------------------------------------------
