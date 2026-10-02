@@ -219,8 +219,10 @@ def depth_l1_loss(
     Returns:
         Scalar disparity L1 loss.
     """
-    disp = torch.where(pred_depth > 0.0, 1.0 / pred_depth, torch.zeros_like(pred_depth))
-    disp_gt = torch.where(gt_depth > 0.0, 1.0 / gt_depth, torch.zeros_like(gt_depth))
+    safe_pred = torch.where(pred_depth > 0.0, pred_depth, torch.ones_like(pred_depth))
+    safe_gt = torch.where(gt_depth > 0.0, gt_depth, torch.ones_like(gt_depth))
+    disp = torch.where(pred_depth > 0.0, 1.0 / safe_pred, torch.zeros_like(pred_depth))
+    disp_gt = torch.where(gt_depth > 0.0, 1.0 / safe_gt, torch.zeros_like(gt_depth))
     return F.l1_loss(disp, disp_gt) * scene_scale
 
 

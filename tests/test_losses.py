@@ -241,6 +241,19 @@ class TestDepthL1Loss:
         loss = depth_l1_loss(pred, gt)
         assert torch.isfinite(loss)
 
+    def test_zero_depth_has_finite_gradients(self):
+        pred = torch.tensor([0.0, 2.0], requires_grad=True)
+        gt = torch.tensor([1.0, 4.0])
+
+        loss = depth_l1_loss(pred, gt)
+        assert torch.isfinite(loss)
+        torch.testing.assert_close(loss, torch.tensor(0.625))
+
+        loss.backward()
+        assert pred.grad is not None
+        assert torch.isfinite(pred.grad).all()
+        torch.testing.assert_close(pred.grad, torch.tensor([0.0, -0.125]))
+
     def test_zero_gt_depth_handling(self):
         pred = torch.tensor([1.0, 2.0])
         gt = torch.tensor([0.0, 2.0])
