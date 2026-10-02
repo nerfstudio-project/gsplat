@@ -305,7 +305,7 @@ def pearson_depth_loss(
     pred_flat = pred_depth.reshape(-1)
     gt_flat = gt_depth.reshape(-1)
     if mask is not None:
-        mask_flat = (mask != 0).reshape(-1)
+        mask_flat = (mask != 0).expand_as(pred_depth).reshape(-1)
         pred_flat = pred_flat[mask_flat]
         gt_flat = gt_flat[mask_flat]
     if pred_flat.numel() < 2:
