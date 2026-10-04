@@ -32,7 +32,7 @@ import tyro
 import viser
 import yaml
 from gsplat.color_correct import color_correct_affine, color_correct_quadratic
-from datasets.colmap import Dataset, Parser
+from datasets.colmap import Dataset, Parser, composite_background
 from datasets.traj import (
     generate_ellipse_path_z,
     generate_interpolated_path,
@@ -194,6 +194,8 @@ class Config:
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
+    # Use input alpha for transparent COLMAP scenes; evaluate over black.
+    use_alpha: bool = False
 
     # LR for 3D point positions
     means_lr: float = 1.6e-4
@@ -413,6 +415,8 @@ class Runner:
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
 
         # Load data: Training data should contain initial points and colors.
+        if cfg.use_alpha and cfg.data_type != "colmap":
+            raise ValueError("--use-alpha requires the COLMAP dataset backend.")
         if cfg.data_type == "ncore":
             if cfg.cache_images:
                 raise ValueError("cache_images is not supported for NCore data.")
@@ -459,8 +463,9 @@ class Runner:
                 split="train",
                 patch_size=cfg.patch_size,
                 load_depths=cfg.depth_loss,
+                load_alpha=cfg.use_alpha,
             )
-            self.valset = Dataset(self.parser, split="val")
+            self.valset = Dataset(self.parser, split="val", load_alpha=cfg.use_alpha)
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
@@ -937,9 +942,11 @@ class Runner:
             else:
                 colors, depths = renders, None
 
-            if cfg.random_bkgd:
-                bkgd = torch.rand(1, 3, device=device)
-                colors = colors + bkgd * (1.0 - alphas)
+            gt_alpha = data["alpha"].to(device) if "alpha" in data else None
+            bkgd = torch.rand(1, 3, device=device) if cfg.random_bkgd else None
+            colors, pixels = composite_background(
+                colors, alphas, pixels, gt_alpha, bkgd
+            )
 
             # While Gaussians are frozen for PPISP controller distillation the render
             # output has requires_grad=False, so densification bookkeeping (e.g.
@@ -1233,7 +1240,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.stage.render(
+            colors, alphas, _ = self.stage.render(
                 self.scene.id,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
@@ -1250,6 +1257,8 @@ class Runner:
             torch.cuda.synchronize()
             ellipse_time += max(time.time() - tic, 1e-10)
 
+            gt_alpha = data["alpha"].to(device) if "alpha" in data else None
+            colors, pixels = composite_background(colors, alphas, pixels, gt_alpha)
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
 

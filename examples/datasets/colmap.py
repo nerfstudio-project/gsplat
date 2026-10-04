@@ -60,14 +60,19 @@ def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
         )
         if os.path.isfile(resized_path):
             continue
-        image = imageio.imread(image_path)[..., :3]
+        image = imageio.imread(image_path)
         resized_size = (
             int(round(image.shape[1] / factor)),
             int(round(image.shape[0] / factor)),
         )
         resized_image = np.array(
-            Image.fromarray(image).resize(resized_size, Image.BICUBIC)
+            Image.fromarray(image[..., :3]).resize(resized_size, Image.BICUBIC)
         )
+        if image.shape[-1] == 4:
+            alpha = np.array(
+                Image.fromarray(image[..., 3]).resize(resized_size, Image.BICUBIC)
+            )
+            resized_image = np.concatenate([resized_image, alpha[..., None]], axis=-1)
         imageio.imwrite(resized_path, resized_image)
     return resized_dir
 
@@ -450,11 +455,13 @@ class Dataset:
         split: str = "train",
         patch_size: Optional[int] = None,
         load_depths: bool = False,
+        load_alpha: bool = False,
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
         self.load_depths = load_depths
+        self.load_alpha = load_alpha
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
             self.indices = indices[indices % self.parser.test_every != 0]
@@ -468,7 +475,9 @@ class Dataset:
     def _load_image(self, item: int) -> np.ndarray:
         """Decode and undistort the image of one item."""
         index = self.indices[item]
-        image = imageio.imread(self.parser.image_paths[index])[..., :3]
+        image = imageio.imread(self.parser.image_paths[index])
+        if not self.load_alpha:
+            image = image[..., :3]
         camera_id = self.parser.camera_ids[index]
         params = self.parser.params_dict[camera_id]
         if len(params) > 0:
@@ -514,6 +523,14 @@ class Dataset:
             K[0, 2] -= x
             K[1, 2] -= y
 
+        alpha = None
+        if self.load_alpha:
+            alpha = (
+                image[..., 3:4].float() / 255.0
+                if image.shape[-1] == 4
+                else torch.ones((*image.shape[:2], 1))
+            )
+        image = image[..., :3]
         data = {
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
@@ -523,6 +540,8 @@ class Dataset:
                 index
             ],  # 0-based contiguous camera index
         }
+        if alpha is not None:
+            data["alpha"] = alpha
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()
 
@@ -555,6 +574,23 @@ class Dataset:
             data["depths"] = torch.from_numpy(depths).float()
 
         return data
+
+
+def composite_background(
+    colors: torch.Tensor,
+    alphas: torch.Tensor,
+    pixels: torch.Tensor,
+    gt_alpha: Optional[torch.Tensor] = None,
+    background: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Composite premultiplied renders and straight-alpha targets consistently."""
+    if gt_alpha is not None:
+        pixels = pixels * gt_alpha
+    if background is not None:
+        colors = colors + background * (1.0 - alphas)
+        if gt_alpha is not None:
+            pixels = pixels + background * (1.0 - gt_alpha)
+    return colors, pixels
 
 
 if __name__ == "__main__":
