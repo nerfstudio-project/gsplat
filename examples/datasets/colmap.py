@@ -511,6 +511,8 @@ class Dataset:
             x = np.random.randint(0, max(w - self.patch_size, 1))
             y = np.random.randint(0, max(h - self.patch_size, 1))
             image = image[y : y + self.patch_size, x : x + self.patch_size]
+            if mask is not None:
+                mask = mask[y : y + self.patch_size, x : x + self.patch_size]
             K[0, 2] -= x
             K[1, 2] -= y
 

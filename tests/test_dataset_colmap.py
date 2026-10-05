@@ -120,3 +120,25 @@ def test_preloading_keeps_the_image_order_and_the_rng_stream(tmp_path):
     torch.manual_seed(42)
     assert _image_ids(trainset, steps) == expected
     assert torch.equal(torch.rand(1), expected_rng)
+
+
+@pytest.mark.parametrize("preload", [False, True])
+@pytest.mark.parametrize("patch_size", [None, 5])
+def test_patch_crop_keeps_mask_aligned_with_image(tmp_path, preload, patch_size):
+    parser = _make_parser(tmp_path)
+    # First training item uses camera 1, whose decoded image has an ROI crop.
+    mask = np.arange(8 * 12).reshape(8, 12) % 3 != 0
+    parser.mask_dict[1] = mask.copy()
+    dataset = Dataset(parser, patch_size=patch_size)
+    if preload:
+        dataset.preload_images(num_workers=2)
+    np.random.seed(0)
+    item = dataset[0]
+    height, width = item["image"].shape[:2]
+    x = int(parser.Ks_dict[1][0, 2] - item["K"][0, 2])
+    y = int(parser.Ks_dict[1][1, 2] - item["K"][1, 2])
+    expected = torch.from_numpy(mask[y : y + height, x : x + width])
+    assert item["mask"].shape == item["image"].shape[:2]
+    assert torch.equal(item["mask"], expected)
+    # Dataset reads must not crop the parser's shared per-camera mask in place.
+    assert np.array_equal(parser.mask_dict[1], mask)
