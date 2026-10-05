@@ -287,6 +287,7 @@ def pearson_depth_loss(
     when fewer than two valid samples remain after masking, and clamps the
     denominator to a tiny positive constant when either input has near-zero
     variance — both situations would otherwise yield NaN.
+    Masked-out non-finite values do not affect the differentiable zero.
 
     Args:
         pred_depth: Predicted depth, shape ``(..., H, W)``.
@@ -309,7 +310,7 @@ def pearson_depth_loss(
         pred_flat = pred_flat[mask_flat]
         gt_flat = gt_flat[mask_flat]
     if pred_flat.numel() < 2:
-        return pred_depth.sum() * 0.0
+        return pred_flat[:0].sum()
 
     pred_centered = pred_flat - pred_flat.mean()
     gt_centered = gt_flat - gt_flat.mean()
@@ -332,7 +333,7 @@ def masked_l1(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
     zero out tool / dynamic-object regions. The mask is broadcast to *pred*'s
     shape (so a ``[B, 1, H, W]`` mask works on ``[B, C, H, W]`` inputs) and
     the mean is taken over unmasked elements only. Returns a differentiable 0
-    when the mask is all-zero (no NaN).
+    when the mask is all-zero, even if excluded inputs contain non-finite values.
 
     Args:
         pred: Predicted tensor.
@@ -353,7 +354,7 @@ def masked_l1(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
         bool_mask = bool_mask.expand_as(abs_diff)
     selected = abs_diff[bool_mask]
     if selected.numel() == 0:
-        return pred.sum() * 0.0
+        return pred[bool_mask].sum()
     return selected.mean()
 
 

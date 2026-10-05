@@ -232,3 +232,156 @@ def test_masked_ssim_partial_mask_loss_near_zero():
 
     loss = masked_ssim(pred, gt, mask)
     assert loss.item() < 1e-3
+
+
+@pytest.fixture(
+    params=[
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="No CUDA device"
+            ),
+        ),
+    ]
+)
+def masked_loss_device(request):
+    return request.param
+
+
+@pytest.fixture(params=[torch.float32, torch.float64])
+def masked_loss_dtype(request):
+    return request.param
+
+
+def _assert_differentiable_zero(loss, pred, gt):
+    assert loss.shape == torch.Size([])
+    assert loss.dtype == pred.dtype
+    assert loss.device == pred.device
+    assert torch.isfinite(loss)
+    assert loss.item() == 0.0
+    assert loss.requires_grad
+    loss.backward()
+    assert pred.grad is not None
+    assert pred.grad.shape == pred.shape
+    assert torch.isfinite(pred.grad).all()
+    torch.testing.assert_close(pred.grad, torch.zeros_like(pred), rtol=0, atol=0)
+    assert gt.grad is None
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [float("nan"), float("inf"), -float("inf"), "overflow"],
+    ids=["nan", "inf", "negative-inf", "overflow"],
+)
+@pytest.mark.parametrize(
+    "loss_fn,valid_samples,layout",
+    [
+        (masked_l1, 0, "full"),
+        (masked_l1, 0, "broadcast"),
+        (masked_l1, 0, "noncontiguous"),
+        (pearson_depth_loss, 0, "full"),
+        (pearson_depth_loss, 1, "full"),
+        (pearson_depth_loss, 0, "noncontiguous"),
+        (pearson_depth_loss, 1, "noncontiguous"),
+    ],
+)
+def test_masked_losses_degenerate_nonfinite(
+    masked_loss_device, masked_loss_dtype, bad_value, loss_fn, valid_samples, layout
+):
+    if bad_value == "overflow":
+        bad_value = torch.finfo(masked_loss_dtype).max * 0.75
+    pred = torch.tensor(
+        [[bad_value, bad_value], [2.0, 4.0]],
+        device=masked_loss_device,
+        dtype=masked_loss_dtype,
+    )
+    gt = torch.tensor(
+        [[bad_value, bad_value], [3.0, 7.0]],
+        device=masked_loss_device,
+        dtype=masked_loss_dtype,
+    )
+    mask = torch.zeros_like(pred, dtype=torch.bool)
+    if valid_samples:
+        mask[1, 0] = True
+    if layout == "broadcast":
+        pred = pred.repeat(2, 3, 1, 1)
+        gt = gt.repeat(2, 3, 1, 1)
+        mask = mask.repeat(2, 1, 1, 1)
+    elif layout == "noncontiguous":
+        pred, gt, mask = pred.t(), gt.t(), mask.t()
+        assert not pred.is_contiguous()
+    pred.requires_grad_()
+    gt.requires_grad_()
+    _assert_differentiable_zero(loss_fn(pred, gt, mask), pred, gt)
+
+
+@pytest.mark.parametrize(
+    "loss_fn,masked",
+    [(masked_l1, True), (pearson_depth_loss, True), (pearson_depth_loss, False)],
+)
+def test_masked_losses_empty_inputs(
+    masked_loss_device, masked_loss_dtype, loss_fn, masked
+):
+    pred = torch.empty(
+        2, 0, device=masked_loss_device, dtype=masked_loss_dtype, requires_grad=True
+    )
+    gt = torch.empty_like(pred, requires_grad=True)
+    mask = torch.zeros_like(pred, dtype=torch.bool) if masked else None
+    _assert_differentiable_zero(loss_fn(pred, gt, mask), pred, gt)
+
+
+@pytest.mark.parametrize("value", [2.0, float("nan"), float("inf"), -float("inf")])
+def test_pearson_depth_loss_unmasked_singleton(
+    masked_loss_device, masked_loss_dtype, value
+):
+    pred = torch.tensor(
+        [value], device=masked_loss_device, dtype=masked_loss_dtype, requires_grad=True
+    )
+    gt = torch.ones_like(pred, requires_grad=True)
+    _assert_differentiable_zero(pearson_depth_loss(pred, gt), pred, gt)
+
+
+@pytest.mark.parametrize("loss_fn", [masked_l1, pearson_depth_loss])
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), -float("inf")])
+def test_masked_losses_nonfinite_excluded_reference(
+    masked_loss_device, masked_loss_dtype, loss_fn, bad_value
+):
+    pred = torch.tensor(
+        [bad_value, 1.0, 2.0, bad_value, 4.0, 6.0],
+        device=masked_loss_device,
+        dtype=masked_loss_dtype,
+        requires_grad=True,
+    )
+    gt = torch.tensor(
+        [bad_value, 2.0, 4.0, bad_value, 3.0, 8.0],
+        device=masked_loss_device,
+        dtype=masked_loss_dtype,
+        requires_grad=True,
+    )
+    mask = torch.tensor(
+        [False, True, True, False, True, True], device=masked_loss_device
+    )
+    reference_pred = pred[mask].detach().clone().requires_grad_()
+    reference_gt = gt[mask].detach().clone().requires_grad_()
+    if loss_fn is masked_l1:
+        expected = (reference_pred - reference_gt).abs().mean()
+    else:
+        expected = (
+            1.0 - torch.corrcoef(torch.stack([reference_pred, reference_gt]))[0, 1]
+        )
+    actual = loss_fn(pred, gt, mask)
+    assert actual.dtype == pred.dtype and actual.device == pred.device
+    assert torch.isfinite(actual)
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+    actual.backward()
+    expected.backward()
+    for tensor, reference in ((pred, reference_pred), (gt, reference_gt)):
+        assert tensor.grad is not None
+        assert torch.isfinite(tensor.grad).all()
+        torch.testing.assert_close(
+            tensor.grad[mask], reference.grad, rtol=1e-5, atol=1e-6
+        )
+        torch.testing.assert_close(
+            tensor.grad[~mask], torch.zeros_like(tensor.grad[~mask]), rtol=0, atol=0
+        )
