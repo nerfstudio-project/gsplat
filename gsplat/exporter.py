@@ -77,6 +77,9 @@ def sort_centers(centers: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor: Sorted indices. Shape (N,)
     """
+    if centers.shape[0] == 0:
+        return indices
+
     # Compute min and max values in a single operation
     min_vals, _ = torch.min(centers, dim=0)
     max_vals, _ = torch.max(centers, dim=0)
@@ -288,6 +291,8 @@ def splat2ply_bytes_compressed(
     for j in range(shN.shape[1]):
         buffer.write(f"property uchar f_rest_{j}\n".encode())
     buffer.write(b"end_header\n")
+    if num_splats == 0:
+        return buffer.getvalue()
 
     chunk_data = []
     splat_data = []
@@ -623,7 +628,7 @@ def export_splats(
 
     # Reshape spherical harmonics
     sh0 = sh0.squeeze(1)  # Shape (N, 3)
-    shN = shN.permute(0, 2, 1).reshape(means.shape[0], -1)  # Shape (N, K * 3)
+    shN = shN.permute(0, 2, 1).flatten(start_dim=1)  # Shape (N, K * 3)
 
     # Check for NaN or Inf values
     invalid_mask = (
