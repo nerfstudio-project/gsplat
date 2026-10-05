@@ -769,3 +769,204 @@ def test_fully_fused_projection_packed_2dgs_empty():
     assert gaussian_ids.numel() == 0
     assert means2d.shape[0] == 0
     assert int(indptr[-1].item()) == 0
+
+
+def _direct_color_scene(batch_dims, cameras, per_view, clipping):
+    means = (
+        torch.tensor(
+            [[0.0, 0.0, 3.0], [0.15, 0.05, 3.5], [-0.2, -0.1, 4.0]], device=device
+        )
+        .expand(*batch_dims, 3, 3)
+        .clone()
+    )
+    if clipping == "partial":
+        means[..., 1, 2] = -3.0
+    elif clipping == "all":
+        means[..., 2] = -means[..., 2]
+    color_shape = batch_dims + ((cameras,) if per_view else ()) + (3, 3)
+    colors = torch.linspace(0.1, 0.9, math.prod(color_shape), device=device).reshape(
+        color_shape
+    )
+    viewmats = torch.eye(4, device=device).repeat(*batch_dims, cameras, 1, 1)
+    viewmats[..., :, 0, 3] = torch.arange(cameras, device=device) * 0.12
+    return dict(
+        means=means.requires_grad_(),
+        quats=torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
+        .repeat(*batch_dims, 3, 1)
+        .requires_grad_(),
+        scales=torch.full(batch_dims + (3, 3), 0.12, device=device, requires_grad=True),
+        opacities=torch.full(batch_dims + (3,), 0.7, device=device, requires_grad=True),
+        colors=colors.requires_grad_(),
+        viewmats=viewmats.requires_grad_(),
+        Ks=torch.tensor(
+            [[32.0, 0.0, 16.0], [0.0, 32.0, 12.0], [0.0, 0.0, 1.0]], device=device
+        ).repeat(*batch_dims, cameras, 1, 1),
+    )
+
+
+def _direct_color_sh_reference(scene, per_view, render_mode="RGB"):
+    # Render each batch/camera independently, using the working SH degree-0 path.
+    batch_dims = scene["means"].shape[:-2]
+    B, N = math.prod(batch_dims), scene["means"].shape[-2]
+    C = scene["viewmats"].shape[-3]
+    flat = {
+        key: value.reshape(B, *value.shape[len(batch_dims) :])
+        for key, value in scene.items()
+    }
+    images = []
+    for batch in range(B):
+        for camera in range(C):
+            rgb = flat["colors"][batch]
+            if per_view:
+                rgb = rgb[camera]
+            sh = ((rgb - 0.5) / 0.28209479177387814).reshape(N, 1, 3)
+            images.append(
+                gsplat.rasterization_2dgs(
+                    **{
+                        key: flat[key][batch]
+                        for key in ("means", "quats", "scales", "opacities")
+                    },
+                    colors=sh,
+                    viewmats=flat["viewmats"][batch, camera : camera + 1],
+                    Ks=flat["Ks"][batch, camera : camera + 1],
+                    width=32,
+                    height=24,
+                    packed=False,
+                    sh_degree=0,
+                    render_mode=render_mode,
+                )
+            )
+    return {
+        index: torch.stack([image[index][0] for image in images]).reshape(
+            *batch_dims, C, *images[0][index].shape[1:]
+        )
+        for index in (0, 1, 2, 4, 5)
+    }
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize(
+    "packed,cameras",
+    [(False, 1), (True, 1), (True, 2)],
+    ids=["unpacked", "packed", "packed-multicam"],
+)
+@pytest.mark.parametrize(
+    "batch_dims", [(), (2,), (1, 2)], ids=["single", "batch", "multi-batch"]
+)
+@pytest.mark.parametrize("per_view", [False, True], ids=["shared", "per-view"])
+@pytest.mark.parametrize("clipping", ["none", "partial", "all"])
+def test_rasterization_2dgs_direct_colors(
+    packed, cameras, batch_dims, per_view, clipping
+):
+    scene = _direct_color_scene(batch_dims, cameras, per_view, clipping)
+    reference_scene = {
+        key: value.detach().clone().requires_grad_(value.requires_grad)
+        for key, value in scene.items()
+    }
+    expected = _direct_color_sh_reference(reference_scene, per_view)
+    actual = gsplat.rasterization_2dgs(**scene, width=32, height=24, packed=packed)
+    for index, reference in expected.items():
+        assert actual[index].shape == reference.shape
+        assert actual[index].dtype == scene["means"].dtype
+        assert actual[index].device == device
+        assert torch.isfinite(actual[index]).all()
+        torch.testing.assert_close(actual[index], reference, rtol=1e-4, atol=1e-5)
+    if packed:
+        visible = {"none": [0, 1, 2], "partial": [0, 2], "all": []}[clipping]
+        assert actual[-1]["gaussian_ids"].numel() == math.prod(
+            batch_dims
+        ) * cameras * len(visible)
+        assert set(actual[-1]["gaussian_ids"].tolist()) == set(visible)
+    weight = torch.linspace(0.5, 1.5, actual[0].numel(), device=device).reshape_as(
+        actual[0]
+    )
+    (actual[0] * weight).mean().backward()
+    (expected[0] * weight).mean().backward()
+    for key, tensor in scene.items():
+        if not tensor.requires_grad:
+            continue
+        assert tensor.grad is not None and tensor.grad.shape == tensor.shape
+        assert torch.isfinite(tensor.grad).all()
+        # Batched geometry backward has an existing cross-batch accumulation
+        # issue in both RGB and SH; compare that path separately below.
+        if not batch_dims or key in ("colors", "opacities"):
+            torch.testing.assert_close(
+                tensor.grad, reference_scene[key].grad, rtol=1e-4, atol=1e-5
+            )
+    culled = {"none": [], "partial": [1], "all": [0, 1, 2]}[clipping]
+    assert torch.count_nonzero(scene["colors"].grad[..., culled, :]) == 0
+    if clipping == "all":
+        assert torch.count_nonzero(actual[0]) == 0
+        assert torch.count_nonzero(actual[1]) == 0
+    else:
+        assert torch.count_nonzero(scene["colors"].grad) > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed,cameras", [(False, 1), (True, 1), (True, 2)])
+@pytest.mark.parametrize("batch_dims", [(2,), (1, 2)])
+@pytest.mark.parametrize("per_view", [False, True])
+def test_rasterization_2dgs_direct_colors_batched_gradients(
+    packed, cameras, batch_dims, per_view
+):
+    scene = _direct_color_scene(batch_dims, cameras, per_view, "partial")
+    palette = scene["colors"].detach().reshape(-1, 3, 3)[0]
+    scene["colors"] = palette.expand_as(scene["colors"]).clone().requires_grad_()
+    reference_scene = {
+        key: value.detach().clone().requires_grad_(value.requires_grad)
+        for key, value in scene.items()
+    }
+    reference_scene["colors"] = (
+        ((palette - 0.5) / 0.28209479177387814).unsqueeze(1).requires_grad_()
+    )
+    actual = gsplat.rasterization_2dgs(**scene, width=32, height=24, packed=packed)[0]
+    expected = gsplat.rasterization_2dgs(
+        **reference_scene, width=32, height=24, packed=packed, sh_degree=0
+    )[0]
+    torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-5)
+    weight = torch.linspace(0.5, 1.5, actual.numel(), device=device).reshape_as(actual)
+    (actual * weight).mean().backward()
+    (expected * weight).mean().backward()
+    for key in ("means", "quats", "scales", "opacities", "viewmats"):
+        assert torch.isfinite(scene[key].grad).all()
+        torch.testing.assert_close(
+            scene[key].grad, reference_scene[key].grad, rtol=1e-4, atol=1e-5
+        )
+    torch.testing.assert_close(
+        scene["colors"].grad.reshape(-1, 3, 3).sum(0),
+        reference_scene["colors"].grad[:, 0] / 0.28209479177387814,
+        rtol=1e-4,
+        atol=1e-5,
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("per_view", [False, True])
+@pytest.mark.parametrize("render_mode", ["RGB+D", "RGB+ED"])
+def test_rasterization_2dgs_direct_colors_depth(packed, per_view, render_mode):
+    scene = _direct_color_scene((2,), 1, per_view, "partial")
+    with torch.no_grad():
+        expected = _direct_color_sh_reference(scene, per_view, render_mode)
+        actual = gsplat.rasterization_2dgs(
+            **scene, width=32, height=24, packed=packed, render_mode=render_mode
+        )
+    assert actual[0].shape == (2, 1, 24, 32, 4)
+    for index, reference in expected.items():
+        assert torch.isfinite(actual[index]).all()
+        torch.testing.assert_close(actual[index], reference, rtol=1e-4, atol=1e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("invalid_layout", ["gaussians", "cameras"])
+def test_rasterization_2dgs_direct_colors_invalid_layout(packed, invalid_layout):
+    scene = _direct_color_scene((), 1, False, "none")
+    shape = (2, 3) if invalid_layout == "gaussians" else (2, 3, 3)
+    scene["colors"] = torch.full(shape, 0.5, device=device)
+    with pytest.raises(RuntimeError, match="colors must have shape"):
+        gsplat.rasterization_2dgs(**scene, width=32, height=24, packed=packed)

@@ -1859,7 +1859,30 @@ Rasterization2DGSResult rasterization_2dgs(
         }
         else
         {
-            feature = colors;
+            const int64_t channels = colors.size(-1);
+            const bool per_view
+                = colors.dim() == batch_ndim + 3 && colors.size(batch_ndim) == C && colors.size(batch_ndim + 1) == N;
+            TORCH_CHECK(
+                per_view || (colors.dim() == batch_ndim + 2 && colors.size(batch_ndim) == N),
+                "colors must have shape [..., N, D] or [..., C, N, D], got ",
+                colors.sizes()
+            );
+            if(packed)
+            {
+                feature
+                    = per_view
+                        ? colors.reshape({B, C, N, channels}).index({batch_ids_opt.value(), camera_ids, gaussian_ids})
+                        : colors.reshape({B, N, channels}).index({batch_ids_opt.value(), gaussian_ids});
+            }
+            else if(per_view)
+            {
+                feature = colors;
+            }
+            else
+            {
+                feature
+                    = colors.unsqueeze(batch_ndim).expand(batch_shape_with_2dgs(means, {C, N, channels})).contiguous();
+            }
         }
     }
     at::optional<at::Tensor> raster_backgrounds = backgrounds;
