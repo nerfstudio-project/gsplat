@@ -275,11 +275,14 @@ class DefaultStrategy(Strategy):
             0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
         )
         if self.refine_scale2d_stop_iter > 0:
-            # Should be ideally using scatter max
-            state["radii"][gs_ids] = torch.maximum(
-                state["radii"][gs_ids],
+            # A Gaussian can have multiple observations in the same batch.
+            state["radii"].scatter_reduce_(
+                0,
+                gs_ids,
                 # normalize radii to [0, 1] screen space
                 radii / float(max(info["width"], info["height"])),
+                reduce="amax",
+                include_self=True,
             )
 
     @torch.no_grad()
