@@ -294,6 +294,10 @@ def rasterization(
     we detail in the following notes. A complete profiling of the these features
     can be found in the :ref:`profiling` page.
 
+    An empty scene (N=0) renders the supplied background, or zeros when no
+    background is supplied, with zero alpha and depth. In distributed mode,
+    ranks with no local Gaussians still render Gaussians received from other ranks.
+
     .. note::
         **Multi-GPU Distributed Rasterization**: This function can be used in a multi-GPU
         distributed scenario by setting `distributed` to True. When `distributed` is True,
@@ -1382,6 +1386,9 @@ def rasterization_2dgs(
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
 
     This function supports a handful of features, similar to the :func:`rasterization` function.
+
+    An empty scene (N=0) renders the supplied background, or zeros when no
+    background is supplied, with zero alpha, depth, normals, and distortion.
 
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.

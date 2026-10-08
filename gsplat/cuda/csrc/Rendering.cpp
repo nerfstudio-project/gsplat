@@ -844,7 +844,7 @@ Rasterization3DGSResult rasterization_3dgs(
     const int64_t batch_ndim                   = means.dim() - 2;
     const int64_t N                            = means.size(-2);
     int64_t C                                  = viewmats.size(batch_ndim);
-    const int64_t B                            = means.numel() / (N * 3);
+    const int64_t B                            = c10::multiply_integers(means.sizes().slice(0, batch_ndim));
     const int64_t I                            = B * C;
     at::optional<at::Tensor> projection_covars = normalize_covars_for_3dgs(covars);
     at::optional<at::Tensor> raster_rays       = expand_rays_for_3dgs(rays, means, viewmats, image_height, image_width);
@@ -1754,7 +1754,7 @@ Rasterization2DGSResult rasterization_2dgs(
     const int64_t batch_ndim = means.dim() - 2;
     const int64_t N          = means.size(-2);
     const int64_t C          = viewmats.size(batch_ndim);
-    const int64_t B          = means.numel() / (N * 3);
+    const int64_t B          = c10::multiply_integers(means.sizes().slice(0, batch_ndim));
     const int64_t I          = B * C;
 
     // --- Project 2D Gaussians (ray-splat transforms) ----------------------
@@ -1859,7 +1859,30 @@ Rasterization2DGSResult rasterization_2dgs(
         }
         else
         {
-            feature = colors;
+            const int64_t channels = colors.size(-1);
+            const bool per_view
+                = colors.dim() == batch_ndim + 3 && colors.size(batch_ndim) == C && colors.size(batch_ndim + 1) == N;
+            TORCH_CHECK(
+                per_view || (colors.dim() == batch_ndim + 2 && colors.size(batch_ndim) == N),
+                "colors must have shape [..., N, D] or [..., C, N, D], got ",
+                colors.sizes()
+            );
+            if(packed)
+            {
+                feature
+                    = per_view
+                        ? colors.reshape({B, C, N, channels}).index({batch_ids_opt.value(), camera_ids, gaussian_ids})
+                        : colors.reshape({B, N, channels}).index({batch_ids_opt.value(), gaussian_ids});
+            }
+            else if(per_view)
+            {
+                feature = colors;
+            }
+            else
+            {
+                feature
+                    = colors.unsqueeze(batch_ndim).expand(batch_shape_with_2dgs(means, {C, N, channels})).contiguous();
+            }
         }
     }
     at::optional<at::Tensor> raster_backgrounds = backgrounds;
@@ -1877,6 +1900,10 @@ Rasterization2DGSResult rasterization_2dgs(
         else
         {
             feature = depths.unsqueeze(-1);
+            if(N == 0)
+            {
+                raster_backgrounds = c10::nullopt;
+            }
         }
     }
     TORCH_CHECK(feature.defined(), "rasterization_2dgs requires at least one color or depth channel");

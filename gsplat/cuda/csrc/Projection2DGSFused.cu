@@ -24,6 +24,7 @@
 #    include <ATen/core/Tensor.h>
 #    include <ATen/cuda/Atomic.cuh>
 #    include <c10/cuda/CUDAStream.h>
+#    include <c10/util/accumulate.h>
 #    include <cooperative_groups.h>
 
 #    include "Common.h"
@@ -300,9 +301,9 @@ void launch_projection_2dgs_fused_fwd_kernel(
     at::Tensor normals         // [..., C, N, 3]
 )
 {
-    uint32_t N = means.size(-2);          // number of gaussians
-    uint32_t B = means.numel() / (N * 3); // number of batches
-    uint32_t C = viewmats.size(-3);       // number of cameras
+    uint32_t N = means.size(-2);                                                  // number of gaussians
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)); // number of batches
+    uint32_t C = viewmats.size(-3);                                               // number of cameras
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);
@@ -529,9 +530,9 @@ void launch_projection_2dgs_fused_bwd_kernel(
     at::Tensor v_viewmats // [..., C, 4, 4]
 )
 {
-    uint32_t N = means.size(-2);          // number of gaussians
-    uint32_t B = means.numel() / (N * 3); // number of batches
-    uint32_t C = viewmats.size(-3);       // number of cameras
+    uint32_t N = means.size(-2);                                                  // number of gaussians
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)); // number of batches
+    uint32_t C = viewmats.size(-3);                                               // number of cameras
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);

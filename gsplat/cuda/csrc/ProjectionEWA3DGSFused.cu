@@ -24,6 +24,7 @@
 #    include <ATen/core/Tensor.h>
 #    include <ATen/cuda/Atomic.cuh>
 #    include <c10/cuda/CUDAStream.h>
+#    include <c10/util/accumulate.h>
 #    include <cooperative_groups.h>
 
 #    include "Common.h"
@@ -242,9 +243,9 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     at::optional<at::Tensor> compensations // [..., C, N] optional
 )
 {
-    uint32_t N = means.size(-2);          // number of gaussians
-    uint32_t C = viewmats.size(-3);       // number of cameras
-    uint32_t B = means.numel() / (N * 3); // number of batches
+    uint32_t N = means.size(-2);                                                  // number of gaussians
+    uint32_t C = viewmats.size(-3);                                               // number of cameras
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)); // number of batches
 
     int64_t n_elements             = B * C * N;
     constexpr unsigned int threads = 256;
@@ -319,7 +320,7 @@ void launch_projection_ewa_3dgs_fused_fwd_kernels(
 {
     uint32_t N = means.size(-2);
     uint32_t C = viewmats.size(-3);
-    uint32_t B = means.numel() / (N * 3);
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2));
 
     constexpr unsigned int threads = 256;
 
@@ -668,9 +669,9 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     at::Tensor v_viewmats // [..., C, 4, 4]
 )
 {
-    uint32_t N = means.size(-2);          // number of gaussians
-    uint32_t C = viewmats.size(-3);       // number of cameras
-    uint32_t B = means.numel() / (N * 3); // number of batches
+    uint32_t N = means.size(-2);                                                  // number of gaussians
+    uint32_t C = viewmats.size(-3);                                               // number of cameras
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)); // number of batches
 
     int64_t n_elements             = B * C * N;
     constexpr unsigned int threads = 256;
@@ -755,7 +756,7 @@ void launch_projection_ewa_3dgs_fused_bwd_kernels(
 {
     uint32_t N = means.size(-2);
     uint32_t C = viewmats.size(-3);
-    uint32_t B = means.numel() / (N * 3);
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2));
 
     constexpr unsigned int threads = 256;
 
