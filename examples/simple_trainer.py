@@ -375,7 +375,8 @@ def create_splats_with_optimizers(
             eps=1e-15 / math.sqrt(BS),
             # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
-            fused=True,
+            # Only torch.optim.Adam takes `fused`; SelectiveAdam/SparseAdam reject it.
+            **({"fused": True} if optimizer_class is torch.optim.Adam else {}),
         )
         for name, _, lr in params
     }
