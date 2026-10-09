@@ -845,13 +845,23 @@ __global__ void rasterize_gradient_bwd_kernel(
                     v_gro_hit    = -grd_n * v_hit_t;
                 }
 
+                // Alpha is clamped to MAX_ALPHA in the forward pass, so the
+                // geometry gradient through alpha is zero when clamped. The
+                // hit distance and normal terms do not depend on alpha and
+                // are backpropagated either way.
+                vec3 v_grd_n = v_grd_n_hit;
+                vec3 v_gro   = v_gro_hit;
                 if(opac * vis <= MAX_ALPHA)
                 {
-                    const float v_vis = opac * v_alpha;
-                    float v_gradDist  = -0.5f * vis * v_vis;
-                    vec3 v_gcrod      = 2.0f * v_gradDist * gcrod;
-                    vec3 v_grd_n      = -glm::cross(v_gcrod, gro) + v_grd_n_hit;
-                    vec3 v_gro        = glm::cross(v_gcrod, grd_n) + v_gro_hit;
+                    const float v_vis  = opac * v_alpha;
+                    float v_gradDist   = -0.5f * vis * v_vis;
+                    vec3 v_gcrod       = 2.0f * v_gradDist * gcrod;
+                    v_grd_n           += -glm::cross(v_gcrod, gro);
+                    v_gro             += glm::cross(v_gcrod, grd_n);
+                    v_opacity_local    = vis * v_alpha;
+                }
+
+                {
                     vec3 v_grd        = safe_normalize_bw(grd, v_grd_n);
                     mat3 v_Mt         = glm::outerProduct(v_grd, ray_d) + glm::outerProduct(v_gro, o_minus_mu);
                     vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
@@ -865,30 +875,29 @@ __global__ void rasterize_gradient_bwd_kernel(
                     v_ray_d += glm::transpose(Mt) * v_grd;
 
                     quat_scale_to_preci_half_vjp(quat, scale, R, glm::transpose(v_Mt), v_quat_local, v_scale_local);
-                    v_opacity_local = vis * v_alpha;
+                }
 
-                    // Compute normal gradient contribution (if computing normals)
-                    // Note: normal was precomputed above for v_alpha contribution
-                    if constexpr(ReturnNormals)
-                    {
-                        // Compute gradient contribution
-                        // Forward: render_normals += normal * fac (where fac = alpha * T)
-                        const vec3 v_normal_local = v_render_n * fac;
+                // Compute normal gradient contribution (if computing normals)
+                // Note: normal was precomputed above for v_alpha contribution
+                if constexpr(ReturnNormals)
+                {
+                    // Compute gradient contribution
+                    // Forward: render_normals += normal * fac (where fac = alpha * T)
+                    const vec3 v_normal_local = v_render_n * fac;
 
-                        // Forward: normal = safe_normalize(unnormalized_flipped)
-                        // unnormalized_flipped was computed in the v_alpha
-                        // precompute block above and reused here.
-                        const vec3 v_unnormalized_flipped = safe_normalize_bw(unnormalized_flipped, v_normal_local);
+                    // Forward: normal = safe_normalize(unnormalized_flipped)
+                    // unnormalized_flipped was computed in the v_alpha
+                    // precompute block above and reused here.
+                    const vec3 v_unnormalized_flipped = safe_normalize_bw(unnormalized_flipped, v_normal_local);
 
-                        // Forward: unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal
-                        const vec3 v_unnormalized = flipped ? -v_unnormalized_flipped : v_unnormalized_flipped;
+                    // Forward: unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal
+                    const vec3 v_unnormalized = flipped ? -v_unnormalized_flipped : v_unnormalized_flipped;
 
-                        // Forward: R[2][:] = unnormalized_normal
-                        const mat3 v_R = mat3(vec3(0.f, 0.f, 0.f), vec3(0.f, 0.f, 0.f), v_unnormalized);
+                    // Forward: R[2][:] = unnormalized_normal
+                    const mat3 v_R = mat3(vec3(0.f, 0.f, 0.f), vec3(0.f, 0.f, 0.f), v_unnormalized);
 
-                        // backward through R = quat_to_rotmat(quat)
-                        quat_to_rotmat_vjp(quat, v_R, v_quat_local);
-                    }
+                    // backward through R = quat_to_rotmat(quat)
+                    quat_to_rotmat_vjp(quat, v_R, v_quat_local);
                 }
 
                 render_accum_dot += rgb_render_dot * fac;

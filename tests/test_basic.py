@@ -4348,6 +4348,138 @@ def test_rasterize_to_pixels_eval3d(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "use_rays",
+    [
+        False,
+        pytest.param(
+            True,
+            marks=pytest.mark.skipif(
+                not has_camera_wrappers(),
+                reason="Camera wrapper support isn't built in",
+            ),
+        ),
+    ],
+    ids=["intrinsics", "rays"],
+)
+@pytest.mark.parametrize("output", ["hit_distance", "normals"])
+@pytest.mark.parametrize("opacity", [0.5, 0.9999], ids=["unclamped", "clamped"])
+def test_rasterize_to_pixels_eval3d_grad_with_clamped_alpha(output, opacity, use_rays):
+    # The forward pass clamps alpha to MAX_ALPHA. That zeroes the gradient
+    # through alpha, but the hit distance and the normal of a Gaussian still
+    # reach the output, so their gradients must flow at clamped pixels too
+    # (issue #978).
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+    )
+
+    width = height = 32
+    tile_size = 8
+    Ks = torch.tensor([[[40.0, 0.0, 16.0], [0.0, 40.0, 16.0], [0.0, 0.0, 1.0]]])
+    Ks = Ks.to(device)
+    viewmats = torch.eye(4, device=device)[None]
+    quats = F.normalize(torch.tensor([[0.9, 0.2, -0.3, 0.1]], device=device))
+    if use_rays:
+        from gsplat.cuda._torch_cameras import _BaseCameraModel
+        from gsplat.cuda._torch_impl_eval3d import _generate_rays
+
+        camera = _BaseCameraModel.create(
+            width=width,
+            height=height,
+            camera_model="pinhole",
+            focal_lengths=Ks[:, [0, 1], [0, 1]],
+            principal_points=Ks[:, [0, 1], [2, 2]],
+        )
+        rays = _generate_rays(camera, width, height, viewmats).detach()
+
+    def grads(impl):
+        params = {
+            "means": torch.tensor([[0.05, -0.03, 3.0]], device=device),
+            "quats": quats.clone(),
+            "scales": torch.tensor([[0.4, 0.3, 0.2]], device=device),
+        }
+        if use_rays:
+            params["rays"] = rays.clone()
+        for v in params.values():
+            v.requires_grad_(True)
+        colors = torch.full((1, 1, 3), 0.5, device=device)
+        opacities = torch.full((1, 1), opacity, device=device)
+        with torch.no_grad():
+            radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+                params["means"],
+                params["quats"],
+                params["scales"],
+                opacities[0],
+                viewmats,
+                Ks,
+                width,
+                height,
+            )
+        tile_width = math.ceil(width / tile_size)
+        tile_height = math.ceil(height / tile_size)
+        _, isect_ids, flatten_ids = isect_tiles(
+            means2d, radii, depths, tile_size, tile_width, tile_height
+        )
+        isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+        isect_offsets = isect_offsets.reshape(1, tile_height, tile_width)
+        args = (
+            params["means"],
+            params["quats"],
+            params["scales"],
+            colors,
+            opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+        )
+        kwargs = dict(
+            use_hit_distance=output == "hit_distance",
+            return_normals=output == "normals",
+            rays=params.get("rays"),
+        )
+        if impl == "cuda":
+            out = rasterize_to_pixels_eval3d_extra(
+                *args, tile_size, isect_offsets, flatten_ids, **kwargs
+            )
+            render_colors, render_alphas, normals = out[0], out[1], out[4]
+        else:
+            out = _rasterize_to_pixels_eval3d(
+                *args,
+                tile_size=tile_size,
+                isect_offsets=isect_offsets,
+                flatten_ids=flatten_ids,
+                **kwargs,
+            )
+            render_colors, render_alphas = out[0], out[1]
+            normals = out[-1] if output == "normals" else None
+        rendered = render_colors[..., -1:] if output == "hit_distance" else normals
+        weights = torch.linspace(0.5, 1.5, rendered.numel(), device=device)
+        (rendered * weights.reshape(rendered.shape)).sum().backward()
+        return render_alphas, {k: v.grad for k, v in params.items()}
+
+    alphas, cuda_grads = grads("cuda")
+    _, ref_grads = grads("torch")
+    if opacity > 0.99:
+        assert (alphas >= 0.99 - 1e-6).any(), "no pixel reached the alpha clamp"
+    else:
+        assert (alphas < 0.99 - 1e-6).all()
+    for name, ref in ref_grads.items():
+        torch.testing.assert_close(
+            cuda_grads[name],
+            ref,
+            rtol=1e-4,
+            atol=1e-4,
+            msg=lambda m, name=name: f"d/d{name}: {m}",
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
 @pytest.mark.parametrize(
     "renderer_config",
