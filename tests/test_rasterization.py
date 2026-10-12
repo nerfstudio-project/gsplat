@@ -870,7 +870,8 @@ def test_rasterization_distributed_single_rank_matches_local(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
-def test_rasterization_lidar_tiling_fits_tile_size():
+@pytest.mark.parametrize("lidar_model", ["at128", "pandar128"])
+def test_rasterization_lidar_tiling_fits_tile_size(lidar_model):
     # Lidar renders with tile_size=8, whose kernels process at most 64 elements
     # per tile. Elements past that were never written, so a tiling built for
     # 16x16 tiles returned uninitialized renders/alphas (issue #1031).
@@ -878,7 +879,7 @@ def test_rasterization_lidar_tiling_fits_tile_size():
 
     torch.manual_seed(42)
     lidar_params, angles_to_columns_map, _ = parse_lidar_camera(
-        "at128", (), 0, 0, device=device, seed=0
+        lidar_model, (), 0, 0, device=device, seed=0
     )
 
     def make_lidar(tiling):
@@ -931,6 +932,7 @@ def test_rasterization_lidar_tiling_fits_tile_size():
     renders, alphas, _ = render(lidar, backgrounds=background)
     torch.testing.assert_close(renders, background.expand_as(renders), atol=0, rtol=0)
     torch.testing.assert_close(alphas, torch.zeros_like(alphas), atol=0, rtol=0)
+
     assert lidar.tiling.max_elements_per_tile <= 8 * 8
 
     # A tiling with more elements per tile than the kernel covers is rejected.
@@ -945,3 +947,90 @@ def test_rasterization_lidar_tiling_fits_tile_size():
     renders, alphas, _ = render(coarse, tile_size=16, backgrounds=background)
     torch.testing.assert_close(renders, background.expand_as(renders), atol=0, rtol=0)
     torch.testing.assert_close(alphas, torch.zeros_like(alphas), atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+@pytest.mark.parametrize("lidar_model", ["at128", "pandar128"])
+@pytest.mark.parametrize("tile_size", [8, 16])
+def test_rasterization_lidar_nontransparent_reference(lidar_model, tile_size):
+    pytest.importorskip("nerfacc")
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+
+    torch.manual_seed(42)
+    params, columns, _ = parse_lidar_camera(
+        lidar_model, (), 0, 0, device=device, seed=0
+    )
+    tiling = gsplat.compute_lidar_tiling(params, max_pts_per_tile=tile_size**2)
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        params, columns, tiling
+    )
+    N = 64
+    means = torch.randn(N, 3, device=device) * 5.0
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.rand(N, 3, device=device) * 0.5 + 0.1
+    opacities = torch.rand(N, device=device) * 0.5 + 0.25
+    colors = torch.rand(N, 3, device=device)
+    viewmats = torch.eye(4, device=device)[None]
+    Ks = torch.eye(3, device=device)[None]
+    background = torch.tensor([[0.25, 0.5, 0.75]], device=device)
+    renders, alphas, meta = gsplat.rasterization(
+        means,
+        quats,
+        scales,
+        opacities,
+        colors,
+        viewmats,
+        Ks,
+        width=lidar.n_columns,
+        height=lidar.n_rows,
+        packed=False,
+        with_eval3d=True,
+        with_ut=True,
+        camera_model="lidar",
+        lidar_coeffs=lidar,
+        tile_size=tile_size,
+        backgrounds=background,
+    )
+    ref_colors, ref_alphas = _rasterize_to_pixels_eval3d(
+        means,
+        quats,
+        scales,
+        colors[None],
+        opacities[None],
+        viewmats,
+        Ks,
+        lidar.n_columns,
+        lidar.n_rows,
+        tile_size,
+        meta["isect_offsets"],
+        meta["flatten_ids"],
+        backgrounds=background,
+        lidar_coeffs=lidar,
+    )
+    assert alphas.max() > 0.1
+    assert torch.isfinite(renders).all() and torch.isfinite(alphas).all()
+    # Lidar's CUDA and PyTorch ray conversions can put a marginal sample on
+    # opposite sides of the 1/255 alpha cutoff (see the eval3d reference tests).
+    # Bound both the size and frequency of those visibility disagreements.
+    boundary = (alphas == 0) ^ (ref_alphas == 0)
+    assert boundary.float().mean() <= 1e-5
+    assert (torch.maximum(alphas, ref_alphas)[boundary] <= 1 / 255 + 1e-5).all()
+    torch.testing.assert_close(
+        alphas[~boundary], ref_alphas[~boundary], rtol=1e-4, atol=1e-5
+    )
+    rgb_boundary = boundary.expand_as(renders)
+    torch.testing.assert_close(
+        renders[~rgb_boundary], ref_colors[~rgb_boundary], rtol=1e-4, atol=1e-5
+    )
+    assert ((renders - ref_colors).abs()[rgb_boundary] <= 1 / 255 + 1e-5).all()
+    print(
+        f"{lidar_model},tile={tile_size},"
+        f"rgb_max_abs={(renders-ref_colors).abs().max().item():.9g},"
+        f"rgb_nonboundary_max_abs={(renders-ref_colors).abs()[~rgb_boundary].max().item():.9g},"
+        f"alpha_max_abs={(alphas-ref_alphas).abs().max().item():.9g},"
+        f"alpha_nonboundary_max_abs={(alphas-ref_alphas).abs()[~boundary].max().item():.9g},"
+        f"boundary_pixels={boundary.sum().item()},"
+        f"alpha_max={alphas.max().item():.9g},"
+        f"pixels={alphas.numel()}"
+    )
