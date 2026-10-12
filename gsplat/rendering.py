@@ -535,6 +535,19 @@ def rasterization(
 
     tile_size = _resolve_tile_size(tile_size, with_eval3d, width, height)
 
+    if lidar_coeffs is not None:
+        # The kernels process at most tile_size**2 elements per tile; the
+        # rest would never be written and read back as uninitialized memory.
+        max_elements = lidar_coeffs.tiling.max_elements_per_tile
+        if max_elements > tile_size * tile_size:
+            raise ValueError(
+                f"The lidar tiling packs up to {max_elements} elements into a "
+                f"tile, but tile_size={tile_size} renders at most "
+                f"{tile_size * tile_size}. Rebuild the tiling with "
+                f"gsplat.compute_lidar_tiling(..., "
+                f"max_pts_per_tile={tile_size * tile_size})."
+            )
+
     if covars is not None:
         quats, scales = None, None
         # convert covars from 3x3 matrix to upper-triangular 6D vector

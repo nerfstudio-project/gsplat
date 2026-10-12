@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from torch import Tensor
+import functools
 import hashlib
 import math
 from dataclasses import dataclass, field, InitVar
@@ -383,6 +384,11 @@ class LidarTiling:
         # These checks need improvement.
         # assert self.tiles_to_elements_map.shape == (self.n_rows*self.n_columns,2)
         # assert self.tiles_to_elements_map.shape[0] <= self.max_pts_per_tile*self.tiles_pack_info.shape[0]
+
+    @functools.cached_property
+    def max_elements_per_tile(self) -> int:
+        """Largest number of (ray) elements packed into a single tile."""
+        return int(self.tiles_pack_info[:, 1].max().item())
 
     @property
     def cdf_resolution_elevation(self) -> int:
@@ -852,7 +858,10 @@ def compute_histogram_equalization(
 def compute_tiling(
     lidar_params: RowOffsetStructuredSpinningLidarModelParameters,
     n_bins_elevation: int = 16,
-    max_pts_per_tile=16 * 16,
+    # Lidar renders with tile_size=8 by default (see _resolve_tile_size in
+    # gsplat/rendering.py), and the 3DGUT kernels process at most
+    # tile_size * tile_size elements per tile.
+    max_pts_per_tile=8 * 8,
     resolution_elevation: int = 1600,
     densification_factor_azimuth: int = 8,
 ) -> LidarTiling:
