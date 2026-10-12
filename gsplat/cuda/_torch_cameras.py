@@ -1647,8 +1647,12 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         )
         assert_shape("cam_ray", cam_ray, B + M + (3,))
 
-        # Points behind camera are invalid
-        valid = cam_ray[..., 2] > 0.0  # [B, M]
+        # The zero ray and backward optical axis have no unique image direction.
+        valid = (
+            (cam_ray[..., 0] != 0.0)
+            | (cam_ray[..., 1] != 0.0)
+            | (cam_ray[..., 2] > 0.0)
+        )
 
         # Compute norm of xy components using numerically stable method
         cam_ray_xy_norm = _numerically_stable_norm2(

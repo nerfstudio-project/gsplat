@@ -1235,3 +1235,80 @@ class TestCameraModelsShutterPose:
         )
 
         assert_mismatch_ratio(test_valid, ref_valid, max=1e-05)
+
+
+def _wide_fisheye_cameras(focal, radial_coeffs=None):
+    parameters = dict(
+        camera_model="fisheye",
+        width=640,
+        height=640,
+        principal_points=torch.tensor([[320.0, 320.0]], device="cuda"),
+        focal_lengths=torch.tensor([[focal, focal]], device="cuda"),
+        radial_coeffs=radial_coeffs,
+    )
+    return create_camera_model(**parameters), _BaseCameraModel.create(**parameters)
+
+
+@pytest.mark.parametrize("fov", [170.0, 179.0, 181.0, 200.0, 220.0])
+def test_fisheye_wide_fov_rays(fov):
+    focal = 640.0 / math.radians(fov)
+    degrees = torch.tensor([0.0, 45.0, 89.0, 90.0, 91.0, 99.0, 109.0], device="cuda")
+    theta = torch.deg2rad(degrees)
+    rays = torch.stack((theta.sin(), torch.zeros_like(theta), theta.cos()), -1)
+    rays[3, 2] = 0.0  # Exact horizon, independent of cosine rounding.
+    rays = rays.unsqueeze(0)
+    expected_valid = degrees < fov / 2.0
+    expected_points = torch.stack(
+        (320.0 + focal * theta, torch.full_like(theta, 320.0)), -1
+    )
+    for camera in _wide_fisheye_cameras(focal):
+        points, valid = camera.camera_ray_to_image_point(rays, 0.0)
+        assert torch.equal(valid.reshape(-1), expected_valid)
+        torch.testing.assert_close(
+            points.reshape(-1, 2)[expected_valid],
+            expected_points[expected_valid],
+            rtol=0,
+            atol=1e-3,
+        )
+        assert torch.isfinite(points).all()
+        visible_points = points.reshape(-1, 2)[expected_valid].unsqueeze(0)
+        recovered, inverse_valid = camera.image_point_to_camera_ray(visible_points)
+        assert inverse_valid.all()
+        torch.testing.assert_close(
+            recovered.reshape(-1, 3),
+            rays.reshape(-1, 3)[expected_valid],
+            rtol=0,
+            atol=2e-5,
+        )
+
+
+def test_fisheye_wide_fov_degenerate_axes():
+    # A large inferred angular domain must not make the backward axis valid.
+    rays = torch.tensor(
+        [[[0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 0.0, 1.0]]], device="cuda"
+    )
+    for camera in _wide_fisheye_cameras(40.0):
+        points, valid = camera.camera_ray_to_image_point(rays, 0.0)
+        assert valid.reshape(-1).tolist() == [False, False, True]
+        assert torch.isfinite(points).all()
+        torch.testing.assert_close(
+            points.reshape(-1, 2)[2], torch.tensor([320.0, 320.0], device="cuda")
+        )
+
+
+def test_fisheye_wide_fov_preserves_polynomial_domain():
+    # d(theta - 0.1 * theta**3)/dtheta reaches zero at sqrt(1 / 0.3).
+    coeffs = torch.tensor([[-0.1, 0.0, 0.0, 0.0]], device="cuda")
+    theta = torch.deg2rad(torch.tensor([100.0, 110.0], device="cuda"))
+    rays = torch.stack(
+        (theta.sin(), torch.zeros_like(theta), theta.cos()), -1
+    ).unsqueeze(0)
+    expected_x = 320.0 + 80.0 * (theta[0] - 0.1 * theta[0] ** 3)
+    for camera in _wide_fisheye_cameras(80.0, coeffs):
+        # Huge image margin isolates angular-domain validity from image bounds.
+        points, valid = camera.camera_ray_to_image_point(rays, 1000.0)
+        assert valid.reshape(-1).tolist() == [True, False]
+        torch.testing.assert_close(
+            points.reshape(-1, 2)[0, 0], expected_x, rtol=0, atol=1e-3
+        )
+        assert torch.isfinite(points).all()

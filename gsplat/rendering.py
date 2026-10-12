@@ -461,9 +461,12 @@ def rasterization(
             sorting Gaussians during rasterization. When True, Gaussians are sorted by their
             z-coordinate in camera space. When False, they are sorted by their Euclidean distance
             from the camera origin. The UT projection kernel then uses Euclidean near/far culling
-            only for LiDAR and FTheta; forward-only camera models continue to use camera-space z
-            culling. A wide-FOV FTheta calibration therefore requires ``global_z_order=False`` to
-            render its beyond-180-degree band. The same setting also makes the D/ED depth channel
+            for LiDAR, FTheta, and fisheye; pinhole and orthographic cameras retain camera-space z
+            culling. Wide-FOV fisheye and FTheta calibrations require ``global_z_order=False`` to
+            render their beyond-180-degree band. For fisheye, use ``camera_model="fisheye"``,
+            ``with_ut=True``, ``with_eval3d=True``, and ``packed=False``. This does not extend
+            the EWA projection path; calibration and image bounds still limit the valid FOV.
+            The same setting also makes the D/ED depth channel
             use Euclidean distance. An FTheta ``max_angle`` must come from calibration and must not
             be raised merely to widen rendered FOV: its forward polynomial is trusted only over
             ``[0, max_angle]``. Default is True.

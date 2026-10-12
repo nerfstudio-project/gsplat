@@ -1393,7 +1393,8 @@ struct OpenCVFisheyeCameraModel
     inline __device__ auto camera_ray_to_image_point_impl(const glm::fvec3 &cam_ray, float margin_factor) const ->
         typename Base::ImagePointReturn
     {
-        if(cam_ray.z <= 0.f)
+        // The zero ray and backward optical axis have no unique image direction.
+        if(cam_ray.x == 0.f && cam_ray.y == 0.f && cam_ray.z <= 0.f)
         {
             return {
                 {0.f, 0.f},

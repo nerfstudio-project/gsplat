@@ -1166,8 +1166,15 @@ def test_fully_fused_projection_ut_ftheta_straddles_camera_plane():
     not torch.cuda.is_available(), reason="CUDA required for UT projection"
 )
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
-def test_fully_fused_projection_ut_ftheta_culling_branch():
-    """FTheta switches from signed-z to radial culling with distance sorting."""
+@pytest.mark.parametrize("camera_model", ["ftheta", "fisheye"])
+@pytest.mark.parametrize(
+    "near_plane,far_plane,visible",
+    [(0.01, 1e10, True), (0.3, 1e10, False), (0.01, 0.1, False)],
+)
+def test_fully_fused_projection_ut_radial_culling(
+    camera_model, near_plane, far_plane, visible
+):
+    """Wide-FOV cameras use radial clipping only with distance sorting."""
     from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
     from gsplat.cuda._wrapper import fully_fused_projection_with_ut
 
@@ -1191,7 +1198,7 @@ def test_fully_fused_projection_ut_ftheta_culling_branch():
         ),
         "width": width,
         "height": height,
-        "camera_model": "ftheta",
+        "camera_model": camera_model,
         "ftheta_coeffs": FThetaCameraDistortionParameters(
             reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
             pixeldist_to_angle_poly=(0.0, 1.0 / focal, 0.0, 0.0, 0.0, 0.0),
@@ -1200,10 +1207,15 @@ def test_fully_fused_projection_ut_ftheta_culling_branch():
             linear_cde=(1.0, 0.0, 0.0),
         ),
         "eps2d": 0.3,
-        "near_plane": 0.01,
-        "far_plane": 1e10,
+        "near_plane": near_plane,
+        "far_plane": far_plane,
         "ut_params": UnscentedTransformParameters(),
     }
+
+    if camera_model == "fisheye":
+        parameters["ftheta_coeffs"] = None
+        parameters["Ks"][..., 0, 0] = focal
+        parameters["Ks"][..., 1, 1] = focal
 
     for projection in (
         fully_fused_projection_with_ut,
@@ -1213,7 +1225,7 @@ def test_fully_fused_projection_ut_ftheta_culling_branch():
         radii_radial = projection(**parameters, global_z_order=False)[0]
 
         assert (radii_global_z == 0).all()
-        assert (radii_radial > 0).all()
+        assert bool((radii_radial > 0).all()) == visible
 
 
 @pytest.mark.skipif(
@@ -8240,3 +8252,54 @@ def test_rasterize_to_pixels_eval3d_empty():
     torch.testing.assert_close(render_normals, torch.zeros_like(render_normals))
     torch.testing.assert_close(last_ids, torch.full_like(last_ids, -1))
     torch.testing.assert_close(sample_counts, torch.zeros_like(sample_counts))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize("background", [0.0, 1.0])
+def test_fisheye_wide_fov_render(background):
+    size = 128
+    focal = size / math.radians(200.0)
+    x, y = 124, 64
+    uv = torch.tensor(
+        [(x + 0.5 - size / 2) / focal, (y + 0.5 - size / 2) / focal], device="cuda"
+    )
+    theta = uv.norm()
+    direction = torch.cat((theta.sin() * uv / theta, theta.cos().reshape(1)))
+    assert direction[2] < 0
+    distances = torch.tensor([2.0, 1.0], device="cuda")
+    colors = torch.tensor(
+        [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]], device="cuda", requires_grad=True
+    )
+    kwargs = dict(
+        means=distances[:, None] * direction,
+        quats=torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]], device="cuda"),
+        scales=distances[:, None].repeat(1, 3) * 0.02,
+        opacities=torch.tensor([0.8, 0.8], device="cuda"),
+        colors=colors,
+        viewmats=torch.eye(4, device="cuda").unsqueeze(0),
+        Ks=torch.tensor(
+            [[[focal, 0.0, size / 2], [0.0, focal, size / 2], [0.0, 0.0, 1.0]]],
+            device="cuda",
+        ),
+        width=size,
+        height=size,
+        packed=False,
+        camera_model="fisheye",
+        with_ut=True,
+        with_eval3d=True,
+        backgrounds=torch.full((1, 3), background, device="cuda"),
+        render_mode="RGB+ED",
+        near_plane=0.01,
+        far_plane=10.0,
+    )
+    rendered, alpha, meta = gsplat.rasterization(**kwargs, global_z_order=False)
+    pixel = rendered[0, y, x]
+    assert alpha[0, y, x, 0] > 0.9
+    assert pixel[0] > pixel[2] + 0.4
+    assert 1.0 <= pixel[3] <= 2.0
+    assert torch.isfinite(rendered).all()
+    assert (meta["radii"] > 0).all()
+    pixel[0].backward()
+    assert colors.grad is not None and torch.isfinite(colors.grad).all()
+    assert colors.grad[1, 0] > colors.grad[0, 0] > 0

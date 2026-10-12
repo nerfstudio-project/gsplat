@@ -400,15 +400,12 @@ void launch_projection_ut_3dgs_fused_kernel(
     // Default unscented-transform parameters when the caller leaves them unset.
     const auto ut = ut_params.has_value() ? ut_params.value() : c10::make_intrusive<UnscentedTransformParameters>();
 
-    // Near/far cull depth. Signed camera-space z unless Euclidean depth sorting
-    // is requested, in which case:
-    //  - LiDAR and FTheta: radial. Their projection accepts rays with z <= 0, so
-    //    a signed-z cull would drop centres they can still image.
-    //  - every other model: still signed z. Its projection rejects z <= 0 rays.
-    // This is per model, not per calibration: a max_angle <= pi/2 FTheta fit
-    // images nothing behind the plane but still takes the radial branch.
-    const bool use_radial_culling
-        = !global_z_order && (camera_model == CameraModelType::LIDAR || camera_model == CameraModelType::FTHETA);
+    // Distance-mode clipping is radial for models that can image z <= 0 rays.
+    // Pinhole and ortho retain signed-z clipping even with distance sorting.
+    const bool use_radial_culling = !global_z_order
+                                 && (camera_model == CameraModelType::LIDAR
+                                     || camera_model == CameraModelType::FTHETA
+                                     || camera_model == CameraModelType::FISHEYE);
 
     auto launch_kernel = [&]<typename SensorModel>()
     {
