@@ -462,18 +462,10 @@ def _fully_fused_projection_with_ut(
         + t_cam[..., None, :]
     )  # [B, C, N, 3]
 
-    # Near/far cull depth is signed camera-space z unless Euclidean depth
-    # sorting is requested. In that mode LiDAR and FTheta use radial depth
-    # because their model classes accept rays with z <= 0; every other model
-    # retains signed z because its projection rejects those rays. This is a
-    # per-model rule: an FTheta calibration with max_angle <= pi/2 still takes
-    # the radial branch even though it images nothing behind the plane.
-    # Keeping forward-only models on signed z also prevents a behind-camera
-    # center from surviving through a few valid UT sigma points.
+    # Distance-mode clipping is radial for models that can image z <= 0 rays.
+    # Pinhole and ortho retain signed-z clipping even with distance sorting.
     center_z = means_cam[..., 2]  # [B, C, N]
-    use_radial_culling = not global_z_order and (
-        camera_model == "lidar" or camera_model == "ftheta"
-    )
+    use_radial_culling = not global_z_order and camera_model in ("lidar", "ftheta", "fisheye")
     cull_depth = means_cam.norm(dim=-1) if use_radial_culling else center_z
     in_frustum = (cull_depth >= near_plane) & (cull_depth <= far_plane)
 
