@@ -4,6 +4,14 @@ recursive-include gsplat/cuda/csrc *
 recursive-include gsplat/cuda/include *
 include gsplat/cuda/ext.cpp
 
+# Non-runtime bulk from vendored GLM (docs, unit tests, build glue, doc tools).
+# None of this is needed to compile against the GLM headers at JIT time; dropping
+# it slims both sdists and wheels by ~19 MB / 1400 files.
+prune gsplat/cuda/csrc/third_party/glm/doc
+prune gsplat/cuda/csrc/third_party/glm/test
+prune gsplat/cuda/csrc/third_party/glm/util
+prune gsplat/cuda/csrc/third_party/glm/cmake
+
 # CUDA / JIT sources for the sub-packages, so that source distributions can
 # JIT-build them. test_data and tests are intentionally not shipped.
 recursive-include gsplat/geometry/kernels/cuda *
