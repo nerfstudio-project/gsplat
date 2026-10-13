@@ -24,7 +24,6 @@
 #    include <ATen/Functions.h>
 #    include <ATen/core/Tensor.h>
 #    include <ATen/cuda/Atomic.cuh>
-#    include <ATen/cuda/cub.h>
 #    include <c10/cuda/CUDAStream.h>
 #    include <cooperative_groups.h>
 #    include <cstdint>
@@ -156,7 +155,6 @@ static __global__ void emit_round_major_pairs_kernel(
     const int32_t *__restrict__ batches_per_tile,
     const int32_t *__restrict__ batch_offsets,
     int64_t *__restrict__ sort_keys,
-    int32_t *__restrict__ sort_values,
     const uint32_t num_tiles,
     const uint32_t bit_width_tile
 )
@@ -174,8 +172,7 @@ static __global__ void emit_round_major_pairs_kernel(
         const int32_t slot = base + batch;
         const uint64_t key
             = (static_cast<uint64_t>(static_cast<uint32_t>(batch)) << bit_width_tile) | static_cast<uint64_t>(tile);
-        sort_keys[slot]   = static_cast<int64_t>(key);
-        sort_values[slot] = slot;
+        sort_keys[slot] = static_cast<int64_t>(key);
     }
 }
 
@@ -187,7 +184,12 @@ namespace
         {
             return 0;
         }
-        return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
+        uint32_t width = 0;
+        for(uint64_t value = x - 1; value != 0; value >>= 1)
+        {
+            ++width;
+        }
+        return width;
     }
 } // namespace
 
@@ -208,13 +210,9 @@ at::Tensor compute_bid_to_slot(
     }
 
     const uint32_t bit_width_tile  = ceil_log2_u64(static_cast<uint64_t>(num_tiles) + 1u);
-    const uint32_t bit_width_round = ceil_log2_u64(static_cast<uint64_t>(total_batches) + 1u);
-    const uint32_t total_bits      = bit_width_tile + bit_width_round;
 
     auto long_opts         = dummy_options.dtype(at::kLong);
     at::Tensor sort_keys   = at::empty({static_cast<int64_t>(total_batches)}, long_opts);
-    at::Tensor sorted_keys = at::empty({static_cast<int64_t>(total_batches)}, long_opts);
-    at::Tensor sort_values = at::empty({static_cast<int64_t>(total_batches)}, int_opts);
 
     const uint32_t threads_per_block = 256;
     const uint32_t blocks            = (num_tiles + threads_per_block - 1) / threads_per_block;
@@ -223,7 +221,6 @@ at::Tensor compute_bid_to_slot(
         batches_per_tile.const_data_ptr<int32_t>(),
         batch_offsets.const_data_ptr<int32_t>(),
         sort_keys.data_ptr<int64_t>(),
-        sort_values.data_ptr<int32_t>(),
         num_tiles,
         bit_width_tile
     );
@@ -231,16 +228,8 @@ at::Tensor compute_bid_to_slot(
     // Sort by `(batch_round, tile)` while carrying the original tile-major
     // slot as the value. The sorted values are the launch-index to slot
     // permutation; no extra scatter is needed.
-    at::cuda::cub::radix_sort_pairs<int64_t, int32_t>(
-        sort_keys.const_data_ptr<int64_t>(),
-        sorted_keys.data_ptr<int64_t>(),
-        sort_values.const_data_ptr<int32_t>(),
-        bid_to_slot.data_ptr<int32_t>(),
-        total_batches,
-        /*descending=*/false,
-        /*begin_bit=*/0,
-        /*end_bit=*/static_cast<int64_t>(total_bits == 0 ? 1u : total_bits)
-    );
+    auto sorted = at::sort(sort_keys, 0, false);
+    bid_to_slot.copy_(std::get<1>(sorted).to(at::kInt));
 
     return bid_to_slot;
 }
