@@ -115,6 +115,10 @@ def get_build_parameters():
                     p := os.path.join(CUDA_HOME, "targets", arch, "include", "cccl")
                 ):
                     extra_include_paths.append(p)
+    if CUDA_HOME:
+        cccl_include = os.path.join(CUDA_HOME, "include", "cccl")
+        if os.path.isdir(cccl_include):
+            extra_include_paths.append(cccl_include)
 
     # Source files ------------------------------------
     sources = (

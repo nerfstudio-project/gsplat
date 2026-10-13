@@ -1528,7 +1528,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     const at::Tensor batch_offsets,    // [num_tiles + 1] int32
     const at::Tensor bid_to_slot,      // [total_batches] int32
     const int64_t total_batches,       // scalar; equals batch_offsets[num_tiles]
-    const bool fwd_only,
+    bool fwd_only,
     // outputs
     at::Tensor renders,                     // [..., C, image_height, image_width, channels]
     at::Tensor alphas,                      // [..., C, image_height, image_width]

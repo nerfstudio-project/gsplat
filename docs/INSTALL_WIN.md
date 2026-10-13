@@ -18,6 +18,8 @@ This has the advantage that you do not have to pin a specific version of the pac
 
 You can install gsplat by compiling the wheel. In this way it will build the CUDA code during installation. This can be done using either the source package from pypi.org the wheel from pypi.org or using a clone of the repository. In all case Visual Studio needs to be install and activated.
 
+For a tested Windows CUDA 13.0 and Blackwell (`sm_120`) source-build matrix, see [INSTALL_WIN_CUDA13.md](INSTALL_WIN_CUDA13.md).
+
 ### Visual studio setup
 
 Setting up and activating Visual Studio can be done through these steps:
