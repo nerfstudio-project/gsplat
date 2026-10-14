@@ -75,8 +75,8 @@ def test_preloaded_item_equals_the_decoded_one(tmp_path, kwargs):
         np.random.seed(i)
         b = uncached[i]
         assert a.keys() == b.keys()
-        assert a["image"].dtype == torch.uint8 and b["image"].dtype == torch.float32
-        assert torch.equal(a["image"].float(), b["image"])
+        assert a["image"].dtype == b["image"].dtype == torch.uint8
+        assert torch.equal(a["image"], b["image"])
         for key in a.keys() - {"image"}:
             if isinstance(a[key], torch.Tensor):
                 assert torch.equal(a[key], b[key]), key

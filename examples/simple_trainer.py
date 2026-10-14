@@ -894,7 +894,7 @@ class Runner:
                 device, non_blocking=True
             )  # [1, 4, 4]
             Ks = data["K"].to(device, non_blocking=True)  # [1, 3, 3]
-            # [1, H, W, 3]; uint8 with --cache_images, float32 otherwise
+            # [1, H, W, 3]; uint8 for COLMAP data, converted to float on the device
             pixels = data["image"].to(device, non_blocking=True).float() / 255.0
             num_train_rays_per_step = (
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
