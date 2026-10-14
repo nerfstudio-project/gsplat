@@ -483,11 +483,7 @@ class Dataset:
         return image
 
     def preload_images(self, num_workers: int = 4) -> None:
-        """Decode and undistort every image once, into host memory.
-
-        `__getitem__` then returns the image in its decoded dtype (uint8 for
-        8-bit images) instead of float32; everything else is unchanged.
-        """
+        """Decode and undistort every image once, into host memory."""
         with ThreadPoolExecutor(max_workers=num_workers) as pool:
             self.images = [
                 torch.from_numpy(image)
@@ -517,7 +513,7 @@ class Dataset:
         data = {
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
-            "image": image if self.images is not None else image.float(),
+            "image": image,  # [H, W, 3], decoded dtype (uint8 for 8-bit images)
             "image_id": item,  # the index of the image in the dataset
             "camera_idx": self.parser.camera_indices[
                 index

@@ -888,17 +888,25 @@ class Runner:
                 trainloader_iter = iter(trainloader)
                 data = next(trainloader_iter)
 
-            camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
-            Ks = data["K"].to(device)  # [1, 3, 3]
-            # [1, H, W, 3]; uint8 with --cache_images, float32 otherwise
+            # The loader pins memory, so non_blocking copies avoid a host sync
+            # that would stall until the previous step finished on the GPU.
+            camtoworlds = camtoworlds_gt = data["camtoworld"].to(
+                device, non_blocking=True
+            )  # [1, 4, 4]
+            Ks = data["K"].to(device, non_blocking=True)  # [1, 3, 3]
+            # [1, H, W, 3]; uint8 for COLMAP data, converted to float on the device
             pixels = data["image"].to(device, non_blocking=True).float() / 255.0
             num_train_rays_per_step = (
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
-            image_ids = data["image_id"].to(device)
-            masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
+            image_ids = data["image_id"].to(device, non_blocking=True)
+            masks = (
+                data["mask"].to(device, non_blocking=True) if "mask" in data else None
+            )  # [1, H, W]
             exposure = (
-                data["exposure"].to(device) if "exposure" in data else None
+                data["exposure"].to(device, non_blocking=True)
+                if "exposure" in data
+                else None
             )  # [B,]
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
@@ -929,7 +937,7 @@ class Runner:
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
                 masks=masks,
                 frame_idcs=image_ids,
-                camera_idcs=data["camera_idx"].to(device),
+                camera_idcs=data["camera_idx"].to(device, non_blocking=True),
                 exposure=exposure,
             )
             if renders.shape[-1] == 4:
@@ -1007,14 +1015,17 @@ class Runner:
 
             loss.backward()
 
-            desc = f"loss={loss.item():.3f}| sh degree={sh_degree_to_use}| "
-            if cfg.depth_loss:
-                desc += f"depth loss={depthloss.item():.6f}| "
-            if cfg.pose_opt and cfg.pose_noise:
-                # monitor the pose error if we inject noise
-                pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
-                desc += f"pose err={pose_err.item():.6f}| "
-            pbar.set_description(desc)
+            # loss.item() syncs host and device; only refresh the progress bar
+            # text every 10 steps so the CPU can keep queueing work ahead.
+            if step % 10 == 0:
+                desc = f"loss={loss.item():.3f}| sh degree={sh_degree_to_use}| "
+                if cfg.depth_loss:
+                    desc += f"depth loss={depthloss.item():.6f}| "
+                if cfg.pose_opt and cfg.pose_noise:
+                    # monitor the pose error if we inject noise
+                    pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
+                    desc += f"pose err={pose_err.item():.6f}| "
+                pbar.set_description(desc)
 
             # write images (gt and render)
             # if world_rank == 0 and step % 800 == 0:
