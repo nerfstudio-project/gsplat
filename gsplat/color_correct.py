@@ -128,21 +128,19 @@ def color_correct_affine(img: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
     # Compute per-channel means
     ref_mean = ref_mat.mean(dim=0)  # [C]
     img_mean = img_mat.mean(dim=0)  # [C]
-    ref_img_mean = (ref_mat * img_mat).mean(dim=0)  # [C]
-    ref_ref_mean = (ref_mat * ref_mat).mean(dim=0)  # [C]
-
-    # Best fit affine: a * ref + b = img (mapping ref -> img)
-    # slope a = Cov(ref, img) / Var(ref)
-    var_ref = ref_ref_mean - ref_mean * ref_mean
-    # Clamp variance away from zero to avoid division by zero / NaN
-    var_ref = torch.clamp(var_ref, min=1e-8)
-    a = (ref_img_mean - ref_mean * img_mean) / var_ref
-    b = img_mean - a * ref_mean
-
-    # Inverse mapping: corrected = (img - b) / a to map img back to match ref
-    # Clamp 'a' away from zero to avoid NaN
-    a = torch.where(a.abs() < 1e-8, torch.ones_like(a), a)
-    corrected_mat = (img_mat - b) / a
+    # Center before forming moments: E[x**2] - E[x]**2 loses precision
+    # on nearly uniform channels, even when the affine fit is identifiable.
+    ref_centered = ref_mat - ref_mean
+    img_centered = img_mat - img_mean
+    var_ref = ref_centered.square().mean(dim=0)
+    has_variation = ref_mat.amax(dim=0) > ref_mat.amin(dim=0)
+    safe_var = torch.where(has_variation, var_ref, torch.ones_like(var_ref))
+    a = (ref_centered * img_centered).mean(dim=0) / safe_var
+    invertible = has_variation & (a.abs() >= torch.finfo(img.dtype).eps)
+    safe_a = torch.where(invertible, a, torch.ones_like(a))
+    # A singular channel has no inverse affine mapping. Its least-squares
+    # constant estimate is the reference mean.
+    corrected_mat = torch.where(invertible, img_centered / safe_a + ref_mean, ref_mean)
     corrected_mat = torch.clip(corrected_mat, 0, 1)
 
     corrected_img = torch.reshape(corrected_mat, img.shape)
