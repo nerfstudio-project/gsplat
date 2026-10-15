@@ -167,3 +167,29 @@ def test_strategy_requires_grad():
 if __name__ == "__main__":
     test_strategy()
     test_strategy_requires_grad()
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_default_strategy_radii_max_over_cameras(packed):
+    from gsplat.strategy import DefaultStrategy
+
+    # 3 gaussians seen by 2 cameras; gaussian 2 is only visible in camera 1.
+    radii = torch.tensor(
+        [[[10, 10], [4, 4], [0, 0]], [[5, 5], [8, 8], [7, 7]]], dtype=torch.int32
+    )
+    info = dict(width=100, height=100, n_cameras=2)
+    if packed:
+        sel = (radii > 0).all(dim=-1)
+        info["gaussian_ids"] = torch.where(sel)[1]
+        info["radii"] = radii[sel]
+        info["means2d"] = torch.zeros(len(info["radii"]), 2, requires_grad=True)
+    else:
+        info["gaussian_ids"] = None
+        info["radii"] = radii
+        info["means2d"] = torch.zeros(2, 3, 2, requires_grad=True)
+    info["means2d"].grad = torch.ones_like(info["means2d"])
+
+    strategy = DefaultStrategy(refine_scale2d_stop_iter=100)
+    state = strategy.initialize_state()
+    strategy._update_state({"means": torch.zeros(3, 3)}, state, info, packed=packed)
+    torch.testing.assert_close(state["radii"], torch.tensor([0.10, 0.08, 0.07]))

@@ -275,11 +275,14 @@ class DefaultStrategy(Strategy):
             0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
         )
         if self.refine_scale2d_stop_iter > 0:
-            # Should be ideally using scatter max
-            state["radii"][gs_ids] = torch.maximum(
-                state["radii"][gs_ids],
+            # gs_ids repeats a gaussian once per camera that sees it, so an
+            # indexed assignment would keep an arbitrary camera's value.
+            state["radii"].scatter_reduce_(
+                0,
+                gs_ids,
                 # normalize radii to [0, 1] screen space
                 radii / float(max(info["width"], info["height"])),
+                reduce="amax",
             )
 
     @torch.no_grad()
