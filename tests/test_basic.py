@@ -4786,10 +4786,8 @@ def test_rasterize_eval3d_autograd_tracks_any_tensor_input(
     for name in differentiable_names:
         inputs[name] = small_scene[name].detach().clone().requires_grad_(False)
 
-    # The C++ adapter's fast path mirrors torch::autograd::Function::apply():
-    # any Tensor input requiring gradients keeps the autograd path active, even
-    # for inputs whose gradients this op does not currently implement.
-    inputs["viewmats"] = small_scene["viewmats"].detach().clone().requires_grad_(True)
+    # A trainable Ks keeps autograd active even though its gradient is unsupported.
+    inputs["Ks"] = small_scene["Ks"].detach().clone().requires_grad_(True)
 
     outputs = _call_rasterize_eval3d_extra(inputs, renderer_config)
     assert outputs[0].requires_grad
@@ -4797,7 +4795,7 @@ def test_rasterize_eval3d_autograd_tracks_any_tensor_input(
     (outputs[0].sum() + outputs[1].sum()).backward()
     torch.cuda.synchronize()
 
-    assert inputs["viewmats"].grad is None
+    assert inputs["Ks"].grad is None
     for name in differentiable_names:
         assert inputs[name].grad is None
 
