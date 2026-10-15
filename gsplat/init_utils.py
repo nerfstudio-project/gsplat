@@ -186,9 +186,14 @@ def knn_scale_init(
     out = torch.empty(n, device=xyz.device, dtype=xyz.dtype)
     for start in range(0, n, chunk):
         end = min(start + chunk, n)
-        block_dists = torch.cdist(xyz[start:end], xyz)  # (chunk, N)
-        knn_dists, _ = block_dists.topk(k + 1, largest=False)  # (chunk, k+1)
-        neighbor_dists = knn_dists[:, 1:]  # drop self → (chunk, k)
+        # The matrix-multiply identity for squared distance suffers from
+        # cancellation when world coordinates are large relative to spacing.
+        block_dists = torch.cdist(
+            xyz[start:end], xyz, compute_mode="donot_use_mm_for_euclid_dist"
+        )  # (chunk, N)
+        rows = torch.arange(end - start, device=xyz.device)
+        block_dists = block_dists.scatter(1, (rows + start)[:, None], float("inf"))
+        neighbor_dists = block_dists.topk(k, largest=False).values
         rms = neighbor_dists.pow(2).mean(dim=-1).sqrt()
         out[start:end] = rms
     return out.clamp_min(eps).log()
