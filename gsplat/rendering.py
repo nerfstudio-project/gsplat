@@ -392,6 +392,14 @@ def rasterization(
         reference from the paper `3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting
         <https://arxiv.org/abs/2412.12507>`_.
 
+    .. note::
+        **Camera Pose Gradients**: With `with_eval3d=True`, gradients flow through
+        camera rays into `viewmats` and `viewmats_rs`. Use a pose parameterization
+        that preserves valid rotations. Explicit `rays` receive these gradients
+        instead. With `with_ut=True`, the `D`/`ED` modes and their RGB variants omit
+        the direct projected-depth derivative; pose gradients through blending
+        weights are still computed.
+
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
@@ -451,7 +459,7 @@ def rasterization(
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [..., N, 3, 3], Default is None.
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
-        with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
+        with_eval3d: Whether to evaluate Gaussian responses in 3D world space instead
             of 2D image space. Default is False.
         return_normals: Whether to compute and return accumulated normals per pixel.
             Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
