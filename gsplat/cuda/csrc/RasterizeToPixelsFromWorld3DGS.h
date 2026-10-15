@@ -187,4 +187,28 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
     at::Tensor v_opacities,         // [..., C, N] or [nnz]
     at::optional<at::Tensor> v_rays // [..., C, image_height, image_width, 6]
 );
+
+// Per-image layout: global [M (row-major 3x3), sum g_o];
+// rolling [g_xi0, v_t0, g_xi1, v_t1], with R <- R Exp(xi).
+// Global gradients: v_R = M - t (sum g_o)^T, v_t = -R sum g_o.
+constexpr int64_t POSE_BWD_ACC = 12;
+
+// Backpropagate world-ray gradients into the per-image pose accumulators.
+void launch_rasterize_to_pixels_from_world_3dgs_pose_bwd_kernel(
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const at::Tensor viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                      // [..., C, 3, 3]
+    const CameraModelType camera_model,
+    ShutterType rs_type,
+    const at::optional<at::Tensor> radial_coeffs,                              // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs,                          // [..., C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs,                          // [..., C, 4] optional
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const at::Tensor v_rays, // [..., C, image_height, image_width, 6]
+    at::Tensor v_pose        // [I, POSE_BWD_ACC] float64, zero-initialized
+);
 } // namespace gsplat

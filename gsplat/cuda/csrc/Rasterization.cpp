@@ -2906,6 +2906,8 @@ namespace
         at::Tensor v_opacities;
         at::Tensor v_backgrounds;
         at::optional<at::Tensor> v_rays;
+        at::Tensor v_viewmats0;
+        at::optional<at::Tensor> v_viewmats1;
     };
 
     // Gradients of the differentiable forward outputs.
@@ -2916,6 +2918,57 @@ namespace
         at::optional<at::Tensor> alphas;
         at::optional<at::Tensor> normals;
     };
+
+    // [I, 3, 3] cross-product matrices of g [I, 3].
+    at::Tensor skew_matrices(const at::Tensor &g)
+    {
+        const at::Tensor x = g.select(-1, 0);
+        const at::Tensor y = g.select(-1, 1);
+        const at::Tensor z = g.select(-1, 2);
+        const at::Tensor o = at::zeros_like(x);
+        return at::stack(
+            {at::stack({o, z.neg(), y}, -1), at::stack({z, o, x.neg()}, -1), at::stack({y.neg(), x, o}, -1)}, -2
+        );
+    }
+
+    // Convert the per-image accumulators defined by POSE_BWD_ACC.
+    // Global shutter returns raw matrix-entry gradients, matching EWA.
+    // For rolling shutter, v_R = 0.5 R [g_xi]_x gives
+    // <v_R, R [d]_x> = g_xi . d; off-manifold derivatives are unspecified.
+    std::pair<at::Tensor, at::optional<at::Tensor>> finalize_viewmat_grads(
+        const at::Tensor &v_pose, const at::Tensor &viewmats0, const at::optional<at::Tensor> &viewmats1
+    )
+    {
+        const int64_t I      = viewmats0.numel() / 16;
+        const at::Tensor acc = v_pose.to(viewmats0.scalar_type());
+
+        auto lift_rotation = [&](const at::Tensor &viewmats, const at::Tensor &g_xi, const at::Tensor &v_t)
+        {
+            const at::Tensor vm = viewmats.reshape({I, 4, 4});
+            const at::Tensor R  = vm.slice(1, 0, 3).slice(2, 0, 3);
+            at::Tensor out      = at::zeros_like(vm);
+            out.slice(1, 0, 3).slice(2, 0, 3).copy_(at::matmul(R, skew_matrices(g_xi)).mul(0.5));
+            out.slice(1, 0, 3).select(2, 3).copy_(v_t);
+            return out.view(viewmats.sizes());
+        };
+
+        if(!viewmats1.has_value())
+        {
+            const at::Tensor vm = viewmats0.reshape({I, 4, 4});
+            const at::Tensor R  = vm.slice(1, 0, 3).slice(2, 0, 3);
+            const at::Tensor t  = vm.slice(1, 0, 3).select(2, 3);
+            const at::Tensor M  = acc.slice(1, 0, 9).reshape({I, 3, 3});
+            const at::Tensor s  = acc.slice(1, 9, 12);
+            at::Tensor out      = at::zeros_like(vm);
+            out.slice(1, 0, 3).slice(2, 0, 3).copy_(M.sub(t.unsqueeze(2).mul(s.unsqueeze(1))));
+            out.slice(1, 0, 3).select(2, 3).copy_(at::matmul(R, s.unsqueeze(2)).squeeze(2).neg());
+            return {out.view(viewmats0.sizes()), c10::nullopt};
+        }
+        return {
+            lift_rotation(viewmats0, acc.slice(1, 0, 3), acc.slice(1, 3, 6)),
+            lift_rotation(viewmats1.value(), acc.slice(1, 6, 9), acc.slice(1, 9, 12)),
+        };
+    }
 
     RasterizeBwdResult rasterize_to_pixels_from_world_3dgs_bwd(
         // input tensors
@@ -3026,8 +3079,21 @@ namespace
         at::Tensor v_scales    = at::zeros_like(scales);
         at::Tensor v_colors    = at::zeros_like(colors);
         at::Tensor v_opacities = at::zeros_like(opacities);
-        at::optional<at::Tensor> v_rays
-            = rays.has_value() ? at::optional<at::Tensor>(at::zeros_like(rays.value())) : at::optional<at::Tensor>();
+        // Internal ray generation needs scratch ray gradients for the pose backward.
+        // Explicit rays receive their own gradients; the caller handles pose chaining.
+        const bool needs_viewmat_grads
+            = !rays.has_value() && (tensor_requires_grad(viewmats0) || tensor_requires_grad(viewmats1));
+        at::optional<at::Tensor> v_rays;
+        if(rays.has_value())
+        {
+            v_rays = at::zeros_like(rays.value());
+        }
+        else if(needs_viewmat_grads)
+        {
+            at::DimVector ray_grad_shape(render_alphas.sizes());
+            ray_grad_shape[ray_grad_shape.size() - 1] = 6;
+            v_rays                                    = at::zeros(ray_grad_shape, means.options().dtype(at::kFloat));
+        }
 
         // --- Launch batch-parallel backward kernel ------------------------
         launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
@@ -3075,6 +3141,41 @@ namespace
             v_rays
         );
 
+        // --- Chain ray gradients into viewmats ----------------------------
+        at::Tensor v_viewmats0;
+        at::optional<at::Tensor> v_viewmats1;
+        if(needs_viewmat_grads)
+        {
+            at::Tensor v_pose = at::zeros({viewmats0.numel() / 16, POSE_BWD_ACC}, means.options().dtype(at::kDouble));
+            launch_rasterize_to_pixels_from_world_3dgs_pose_bwd_kernel(
+                static_cast<uint32_t>(image_width),
+                static_cast<uint32_t>(image_height),
+                viewmats0,
+                viewmats1,
+                Ks,
+                camera_model,
+                rs_type,
+                radial_coeffs,
+                tangential_coeffs,
+                thin_prism_coeffs,
+                ftheta_coeffs,
+                lidar_coeffs,
+                external_distortion_params,
+                v_rays.value(),
+                v_pose
+            );
+            auto [g0, g1] = finalize_viewmat_grads(v_pose, viewmats0, viewmats1);
+            if(tensor_requires_grad(viewmats0))
+            {
+                v_viewmats0 = g0;
+            }
+            if(tensor_requires_grad(viewmats1))
+            {
+                v_viewmats1 = g1;
+            }
+            v_rays = c10::nullopt; // scratch, not the gradient of an input
+        }
+
         // --- Compute background gradient ----------------------------------
         // Background contribution is not produced by the CUDA backward kernel.
         // It is the incoming color gradient weighted by the unoccluded alpha.
@@ -3094,6 +3195,8 @@ namespace
             .v_opacities   = v_opacities,
             .v_backgrounds = v_backgrounds,
             .v_rays        = v_rays,
+            .v_viewmats0   = v_viewmats0,
+            .v_viewmats1   = v_viewmats1,
         };
     }
 
@@ -3347,6 +3450,8 @@ namespace
             grads[FwdInput::OPACITIES]   = g.v_opacities;
             grads[FwdInput::BACKGROUNDS] = g.v_backgrounds;
             grads[FwdInput::RAYS]        = as_tensor(g.v_rays);
+            grads[FwdInput::VIEWMATS0]   = g.v_viewmats0;
+            grads[FwdInput::VIEWMATS1]   = as_tensor(g.v_viewmats1);
             return grads;
         }
 
