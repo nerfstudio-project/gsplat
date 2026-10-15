@@ -91,15 +91,17 @@ def compute_tv_loss_targeted(image: Tensor, mask: Optional[Tensor] = None) -> Te
             "Convert via `(mask > threshold).float()` first if needed."
         )
 
+    # Count the same broadcast elements that participate in the numerator.
+    # A shared batch/spatial mask must normalize like its expanded equivalent.
+    mask = torch.broadcast_to(mask, image.shape)
     mask_h = mask[:, :, 1:, :]
     mask_w = mask[:, :, :, 1:]
 
     tv_h_sum = (tv_h * mask_h).sum()
     tv_w_sum = (tv_w * mask_w).sum()
 
-    channels = image.shape[1]
-    num_h = mask_h.sum() * channels + 1e-8
-    num_w = mask_w.sum() * channels + 1e-8
+    num_h = mask_h.sum() + 1e-8
+    num_w = mask_w.sum() + 1e-8
 
     return tv_h_sum / num_h + tv_w_sum / num_w
 
