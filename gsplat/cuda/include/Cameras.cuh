@@ -1374,14 +1374,14 @@ struct OpenCVFisheyeCameraModel
             max(max_radius_pixels / parameters.focal_length[0], max_radius_pixels / parameters.focal_length[1])
         );
 
-        // approximate backward poly (mapping normalized distances to angles)
-        // *very crudely* by linear interpolation / equidistant angle model
-        // (also assuming image-centered principal point)
-        const auto max_normalized_dist = std::max(
-            parameters.resolution[0] / 2.f / parameters.focal_length[0],
-            parameters.resolution[1] / 2.f / parameters.focal_length[1]
-        );
-        approx_backward_poly = {0.f, max_angle / max_normalized_dist};
+        // approximate backward poly (mapping normalized distances to angles) by the
+        // equidistant model theta = theta_d, the Newton start for inverting the
+        // forward polynomial. A linear fit through (max_normalized_dist, max_angle)
+        // overshoots near the edge of the field of view: for typical fisheye
+        // coefficients the start then lies past the forward polynomial's maximum, Newton
+        // converges to the second root beyond it, and the ray is rejected by the
+        // max_angle check (all pixels beyond ~80 deg become invalid).
+        approx_backward_poly = {0.f, 1.f};
     }
 
     Parameters parameters;

@@ -1010,6 +1010,83 @@ def test_projection_rejects_rays_beyond_max_angle(test_camera, ref_camera):
     )
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize(
+    "radial_coeffs",
+    [
+        # coefficients of a real ~180 deg fisheye lens: factory calibration and
+        # the same lens refined by COLMAP
+        [0.005581, -0.04054, 0.027259, -0.005462],
+        [-0.002536, -0.030541, 0.020518, -0.003815],
+    ],
+)
+@pytest.mark.parametrize("implementation", ["cuda", "reference"])
+def test_fisheye_unprojection_valid_up_to_lens_edge(radial_coeffs, implementation):
+    """Regression for the OpenCV-fisheye Newton start in `image_point_to_camera_ray`.
+
+    Pre-fix, Newton started from a linear guess theta0 = theta_d * max_angle /
+    max_normalized_dist, which overshoots near the edge of the field of view. For
+    these coefficients the start lay past the forward polynomial's maximum
+    (~103 deg), Newton converged to the second root (~116 deg), and every image
+    point beyond ~80 deg was rejected as invalid: those pixels rendered empty.
+
+    Projects rays at 1-85 deg with the forward model and checks that unprojection
+    recovers them as valid rays at the same angle.
+    """
+    width, height = 1224, 1024
+    device = torch.device("cuda")
+    params = dict(
+        camera_model="fisheye",
+        width=width,
+        height=height,
+        principal_points=torch.tensor([612.75, 510.0], device=device),
+        focal_lengths=torch.tensor([481.6, 481.8], device=device),
+        radial_coeffs=torch.tensor(radial_coeffs, device=device),
+        rs_type=RollingShutterType.GLOBAL,
+    )
+    camera = (
+        create_camera_model(**params)
+        if implementation == "cuda"
+        else _BaseCameraModel.create(**params)
+    )
+
+    # sweep the angle along the four image diagonals, where 80-85 deg is still
+    # inside the image (along the axes it is not)
+    corner = math.atan2(height / 2, width / 2)
+    phis = torch.tensor(
+        [corner, math.pi - corner, math.pi + corner, 2 * math.pi - corner],
+        device=device,
+    )
+    theta_1d = torch.deg2rad(torch.linspace(1.0, 85.0, 169, device=device))
+    theta = theta_1d.repeat(len(phis))
+    phi = phis.repeat_interleave(len(theta_1d))
+    k1, k2, k3, k4 = radial_coeffs
+    t2 = theta * theta
+    theta_d = theta * (1 + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4))))
+    focal, center = params["focal_lengths"], params["principal_points"]
+    image_points = torch.stack(
+        [
+            focal[0] * theta_d * torch.cos(phi) + center[0],
+            focal[1] * theta_d * torch.sin(phi) + center[1],
+        ],
+        dim=-1,
+    )
+    inside = (
+        (image_points[:, 0] >= 0)
+        & (image_points[:, 0] < width)
+        & (image_points[:, 1] >= 0)
+        & (image_points[:, 1] < height)
+    )
+
+    rays, valid = camera.image_point_to_camera_ray(image_points[inside])
+    assert bool(valid.all()), (
+        f"{int((~valid).sum())} of {valid.numel()} in-image points rejected; first "
+        f"rejected angle {float(torch.rad2deg(theta[inside][~valid]).min()):.1f} deg"
+    )
+    recovered = torch.atan2(torch.linalg.norm(rays[..., :2], dim=-1), rays[..., 2])
+    assert_close(recovered, theta[inside], atol=1e-4, rtol=0.0)
+
+
 @pytest.mark.parametrize(
     "reference_poly",
     [

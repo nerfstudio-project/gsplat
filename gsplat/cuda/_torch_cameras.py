@@ -1497,15 +1497,16 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
 
         self.max_angle = max_angle  # [B]
 
-        # Approximate backward polynomial (linear approximation for initial guess)
-        # Maps normalized distances to angles (very crude approximation)
-        max_normalized_dist = torch.maximum(width / 2.0 / fx, height / 2.0 / fy)  # [B]
-
+        # Approximate backward polynomial (initial guess for the Newton inversion):
+        # the equidistant model theta = theta_d. A linear fit through
+        # (max_normalized_dist, max_angle) overshoots near the edge of the field of
+        # view, so Newton can converge to the second root beyond the forward
+        # polynomial's maximum and the ray is rejected by the max_angle check.
         self.approx_backward_poly = FullPolynomialProxy(
             torch.stack(
                 [
                     torch.zeros_like(max_angle),  # constant term (0)
-                    max_angle / max_normalized_dist,  # linear term
+                    torch.ones_like(max_angle),  # linear term (equidistant)
                 ],
                 dim=-1,
             )
