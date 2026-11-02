@@ -1695,7 +1695,8 @@ namespace
         at::Tensor dy       = points.narrow(h_dim, 1, H - 2).narrow(w_dim, 2, W - 2)
                             - points.narrow(h_dim, 1, H - 2).narrow(w_dim, 0, W - 2);
         at::Tensor normals  = at::linalg_cross(dx, dy, -1);
-        at::Tensor norm     = at::sqrt((normals * normals).sum(-1, true)).clamp_min(1e-12);
+        // As F.normalize: linalg_vector_norm has a zero gradient at 0, sqrt(sum(x^2)) a NaN one (flat depth).
+        at::Tensor norm     = at::linalg_vector_norm(normals, 2, {-1}, true).clamp_min(1e-12);
         normals             = normals / norm;
         // F.pad(normals, (0, 0, 1, 1, 1, 1)): pad W and H dims by 1 on each side.
         return at::constant_pad_nd(normals, {0, 0, 1, 1, 1, 1}, 0.0); // [..., H, W, 3]
