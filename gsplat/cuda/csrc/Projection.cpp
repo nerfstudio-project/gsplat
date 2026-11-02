@@ -1480,13 +1480,18 @@ Projection2DGSFusedBwdResult projection_2dgs_fused_bwd(
     CHECK_INPUT(radii);
     CHECK_INPUT(ray_transforms);
     CHECK_DENSE(grad.means2d);
-    CHECK_INPUT(grad.means2d);
     CHECK_DENSE(grad.depths);
-    CHECK_INPUT(grad.depths);
     CHECK_DENSE(grad.normals);
-    CHECK_INPUT(grad.normals);
     CHECK_DENSE(grad.ray_transforms);
-    CHECK_INPUT(grad.ray_transforms);
+    // Autograd may hand in non-contiguous grads (e.g. expanded zeros for unused outputs).
+    at::Tensor grad_means2d        = grad.means2d.contiguous();
+    at::Tensor grad_depths         = grad.depths.contiguous();
+    at::Tensor grad_normals        = grad.normals.contiguous();
+    at::Tensor grad_ray_transforms = grad.ray_transforms.contiguous();
+    CHECK_INPUT(grad_means2d);
+    CHECK_INPUT(grad_depths);
+    CHECK_INPUT(grad_normals);
+    CHECK_INPUT(grad_ray_transforms);
 
     at::Tensor v_means  = at::zeros_like(means);
     at::Tensor v_quats  = at::zeros_like(quats);
@@ -1508,10 +1513,10 @@ Projection2DGSFusedBwdResult projection_2dgs_fused_bwd(
         image_height,
         radii,
         ray_transforms,
-        grad.means2d,
-        grad.depths,
-        grad.normals,
-        grad.ray_transforms,
+        grad_means2d,
+        grad_depths,
+        grad_normals,
+        grad_ray_transforms,
         viewmats_requires_grad,
         // outputs
         v_means,
