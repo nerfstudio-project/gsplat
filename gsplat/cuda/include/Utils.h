@@ -17,11 +17,15 @@
 
 #pragma once
 
-#include <c10/cuda/CUDAFunctions.h>
-
 #include <algorithm>
 #include <cstddef>
 #include <tuple>
+
+#if defined(USE_ROCM)
+#    include <c10/hip/HIPFunctions.h>
+#else
+#    include <c10/cuda/CUDAFunctions.h>
+#endif
 
 namespace gsplat
 {

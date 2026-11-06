@@ -24,6 +24,18 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/glm.hpp>
 
+#ifndef USE_ROCM
+#    include <c10/cuda/CUDAStream.h> // at::cuda::getCurrentCUDAStream
+#    include <c10/cuda/CUDACachingAllocator.h>
+#    include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
+#else
+#    include <c10/hip/HIPStream.h>
+#    include <c10/hip/HIPCachingAllocator.h>
+#    include <c10/hip/HIPGuard.h>
+#    include <c10/core/DeviceGuard.h>
+#    include "RocmCeilDiv.cuh"
+#endif
+
 namespace gsplat
 {
 //
@@ -36,27 +48,43 @@ namespace gsplat
     CHECK_CONTIGUOUS(x)
 // Kernels index raw dense storage; a strided (non-sparse) layout is required.
 #define CHECK_DENSE(x)     TORCH_CHECK(x.layout() == c10::kStrided, #x " must be a dense tensor")
-#define DEVICE_GUARD(_ten) const at::OptionalDeviceGuard device_guard(device_of(_ten));
+
+#ifndef USE_ROCM
+#    define GET_CURRENT_STREAM() at::cuda::getCurrentCUDAStream()
+#    define DEVICE_GUARD(_ten) const at::OptionalDeviceGuard device_guard(device_of(_ten));
+#    define GSPLAT_GRID_CONSTANT __grid_constant__
+#else
+#    define cub hipcub
+#    define GET_CURRENT_STREAM() at::cuda::getCurrentCUDAStream()
+#    define DEVICE_GUARD(_ten) const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
+#    define GSPLAT_GRID_CONSTANT
+#    define cudaFuncSetAttribute hipFuncSetAttribute
+#    define cudaFuncAttributeMaxDynamicSharedMemorySize hipFuncAttributeMaxDynamicSharedMemorySize
+#    define cudaSuccess hipSuccess
+#endif
 
 // Host/device qualifier for helpers shared between host (tests, host-side
-// setup) and device code. Expands to nothing under a non-CUDA compiler.
-#ifdef __CUDACC__
+// setup) and device code. Expands to nothing under a non-CUDA/HIP compiler.
+#if defined(__CUDACC__) || defined(__HIP__)
 #    define GSPLAT_HOST_DEVICE __host__ __device__
 #else
 #    define GSPLAT_HOST_DEVICE
 #endif
 
+#ifndef USE_ROCM
 // https://github.com/pytorch/pytorch/blob/233305a852e1cd7f319b15b5137074c9eac455f6/aten/src/ATen/cuda/cub.cuh#L38-L46
 // handle the temporary storage and 'twice' calls for cub API
-#define CUB_WRAPPER(func, ...)                                                    \
-    do                                                                            \
-    {                                                                             \
-        size_t temp_storage_bytes = 0;                                            \
-        func(nullptr, temp_storage_bytes, __VA_ARGS__);                           \
-        auto &caching_allocator = *::c10::cuda::CUDACachingAllocator::get();      \
-        auto temp_storage       = caching_allocator.allocate(temp_storage_bytes); \
-        func(temp_storage.get(), temp_storage_bytes, __VA_ARGS__);                \
-    } while(false)
+// (the ROCm/hipcub variant lives in Common.cuh)
+#    define CUB_WRAPPER(func, ...)                                                    \
+        do                                                                            \
+        {                                                                             \
+            size_t temp_storage_bytes = 0;                                            \
+            func(nullptr, temp_storage_bytes, __VA_ARGS__);                           \
+            auto &caching_allocator = *::c10::cuda::CUDACachingAllocator::get();      \
+            auto temp_storage       = caching_allocator.allocate(temp_storage_bytes); \
+            func(temp_storage.get(), temp_storage_bytes, __VA_ARGS__);                \
+        } while(false)
+#endif
 
 //
 // Convenience typedefs for CUDA types

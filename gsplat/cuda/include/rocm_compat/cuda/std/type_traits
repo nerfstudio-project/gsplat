@@ -1,0 +1,12 @@
+#pragma once
+
+#include <type_traits>
+
+namespace cuda
+{
+namespace std
+{
+template<typename T>
+inline constexpr bool is_floating_point_v = ::std::is_floating_point_v<T>;
+} // namespace std
+} // namespace cuda

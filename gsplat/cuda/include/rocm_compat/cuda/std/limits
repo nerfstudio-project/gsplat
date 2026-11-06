@@ -1,0 +1,12 @@
+#pragma once
+
+#include <limits>
+
+namespace cuda
+{
+namespace std
+{
+template<typename T>
+using numeric_limits = ::std::numeric_limits<T>;
+} // namespace std
+} // namespace cuda

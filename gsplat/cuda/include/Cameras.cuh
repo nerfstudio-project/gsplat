@@ -25,7 +25,11 @@
 #include <cmath>
 #include <limits>
 #include <type_traits>
-#include <cuda_runtime.h>
+#ifdef USE_ROCM
+#    include <hip/hip_runtime.h>
+#else
+#    include <cuda_runtime.h>
+#endif
 
 // Silence warnings / errors of the form
 //
@@ -34,10 +38,14 @@
 //
 // in GLM
 #define GLM_ENABLE_EXPERIMENTAL
+#ifndef USE_ROCM
 #pragma nv_diag_suppress = esa_on_defaulted_function_ignored
+#endif
 #include <glm/gtx/matrix_operation.hpp> // needs define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/quaternion.hpp>       // glm rotate
+#ifndef USE_ROCM
 #pragma nv_diag_default = esa_on_defaulted_function_ignored
+#endif
 
 #include "Cameras.h"
 #include "ExternalDistortion.cuh"
@@ -521,6 +529,10 @@ struct BaseCameraModel
 
         case ShutterType::ROLLING_RIGHT_TO_LEFT:
             t = (resolution[0] - std::ceil(image_point.x)) / (resolution[0] - 1);
+            break;
+
+        case ShutterType::GLOBAL:
+            // All pixels share the same exposure time; t stays 0.
             break;
         }
 
@@ -1520,7 +1532,7 @@ struct OpenCVFisheyeCameraModel
 
 struct FThetaCameraDistortionDeviceParams
 {
-    inline __device__ FThetaCameraDistortionDeviceParams() { }
+    inline __host__ __device__ FThetaCameraDistortionDeviceParams() { }
 
     inline __host__ FThetaCameraDistortionDeviceParams(const FThetaCameraDistortionParameters &params)
         : reference_poly(params.reference_poly)
@@ -1578,21 +1590,21 @@ public:
         {
             // compute first derivative of the backwards polynomial
             dreference_poly
-                = {1.f * dist.pixeldist_to_angle_poly.at(1),
-                   2.f * dist.pixeldist_to_angle_poly.at(2),
-                   3.f * dist.pixeldist_to_angle_poly.at(3),
-                   4.f * dist.pixeldist_to_angle_poly.at(4),
-                   5.f * dist.pixeldist_to_angle_poly.at(5)};
+                = {1.f * dist.pixeldist_to_angle_poly[1],
+                   2.f * dist.pixeldist_to_angle_poly[2],
+                   3.f * dist.pixeldist_to_angle_poly[3],
+                   4.f * dist.pixeldist_to_angle_poly[4],
+                   5.f * dist.pixeldist_to_angle_poly[5]};
         }
         else
         {
             // compute first derivative of the forward polynomial
             dreference_poly
-                = {1.f * dist.angle_to_pixeldist_poly.at(1),
-                   2.f * dist.angle_to_pixeldist_poly.at(2),
-                   3.f * dist.angle_to_pixeldist_poly.at(3),
-                   4.f * dist.angle_to_pixeldist_poly.at(4),
-                   5.f * dist.angle_to_pixeldist_poly.at(5)};
+                = {1.f * dist.angle_to_pixeldist_poly[1],
+                   2.f * dist.angle_to_pixeldist_poly[2],
+                   3.f * dist.angle_to_pixeldist_poly[3],
+                   4.f * dist.angle_to_pixeldist_poly[4],
+                   5.f * dist.angle_to_pixeldist_poly[5]};
         }
 
         // FThetaCameraModelParameters are defined such that the image coordinate origin corresponds to

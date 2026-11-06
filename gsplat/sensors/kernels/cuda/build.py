@@ -50,6 +50,50 @@ NINJA_STATUS = os.getenv("NINJA_STATUS")
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 
 
+def _rocm_lib_dir() -> str | None:
+    """Locate the pip ROCm SDK lib dir holding libamdhip64.
+
+    torch resolves ROCM_HOME from the hipcc on PATH (here ``.venv/bin/hipcc``),
+    so it emits ``-L<venv>/lib -lamdhip64`` — but the runtime lib actually lives
+    in the ``_rocm_sdk_devel`` site-package. Return that dir so the JIT link can
+    find libamdhip64; None when no pip SDK is present (e.g. system /opt/rocm).
+    """
+    import site
+
+    candidates = list(site.getsitepackages())
+    user_site = site.getusersitepackages()
+    if user_site:
+        candidates.append(user_site)
+    for sp in candidates:
+        for name in ("_rocm_sdk_devel", "_rocm_sdk_core"):
+            lib = os.path.join(sp, name, "lib")
+            if os.path.exists(os.path.join(lib, "libamdhip64.so")):
+                return lib
+    return None
+
+
+def _rocm_sdk_include_dir() -> str | None:
+    """Locate the pip ROCm SDK include dir that ships hipsparse/hipsparse.h.
+
+    torch emits its ROCm includes from ``_rocm_sdk_core``, but torch's own
+    ``ATen/hip`` headers pull in ``hipsparse/hipsparse.h`` which only ships in
+    ``_rocm_sdk_devel``. Return that include dir so it can be added via
+    ``-isystem``; None when no pip SDK is present (e.g. system /opt/rocm).
+    """
+    import site
+
+    candidates = list(site.getsitepackages())
+    user_site = site.getusersitepackages()
+    if user_site:
+        candidates.append(user_site)
+    for sp in candidates:
+        for name in ("_rocm_sdk_devel", "_rocm_sdk_core"):
+            inc = os.path.join(sp, name, "include")
+            if os.path.isfile(os.path.join(inc, "hipsparse", "hipsparse.h")):
+                return inc
+    return None
+
+
 def get_build_parameters() -> SimpleNamespace:
     """Enumerate source files and compiler flags for the CUDA extension.
 
@@ -75,7 +119,12 @@ def get_build_parameters() -> SimpleNamespace:
     geometry_csrc = os.path.normpath(
         os.path.join(PATH, "..", "..", "..", "geometry", "kernels", "cuda", "csrc")
     )
-    extra_include_paths: list[str] = [geometry_csrc]
+    # This extension's own csrc dir MUST be on the include path: on ROCm, torch's
+    # JIT hipify only hipifies headers it can find via extra_include_paths, so
+    # without it the local .cuh/.h files (camera_kernel.cuh, camera_torch.h, ...)
+    # are never copied into the generated hip/ tree and the build fails with
+    # "'camera_kernel.cuh' file not found".
+    extra_include_paths: list[str] = [os.path.join(PATH, "csrc"), geometry_csrc]
     extra_cflags: list[str] = []
     extra_cuda_cflags: list[str] = []
     extra_ldflags: list[str] = []
@@ -101,6 +150,25 @@ def get_build_parameters() -> SimpleNamespace:
 
     if torch.version.hip:
         extra_cflags += ["-DUSE_ROCM", "-U__HIP_NO_HALF_CONVERSIONS__"]
+        rocm_lib = _rocm_lib_dir()
+        if rocm_lib is not None:
+            extra_ldflags += [f"-L{rocm_lib}", f"-Wl,-rpath,{rocm_lib}"]
+        # hipsparse.h (pulled in by torch's ATen/hip headers) ships only in the
+        # _rocm_sdk_devel include tree, which torch's JIT does not add. Feed it
+        # via -isystem; extra_cflags is merged into extra_cuda_cflags below.
+        rocm_inc = _rocm_sdk_include_dir()
+        if rocm_inc is not None:
+            extra_cflags += [f"-isystem{rocm_inc}"]
+        # ROCm's clang defaults to the newest installed gcc libstdc++. gcc-14's
+        # <format> pulls in bits/unicode.h, which has a libstdc++ bug (`++this;`
+        # instead of `++*this;`) that clang rejects but g++ tolerates. Pin clang
+        # to a gcc toolchain whose headers compile — prefer 13, fall back to 12.
+        # Clang-only flag: goes in extra_cuda_cflags, not extra_cflags.
+        for _gcc_ver in ("13", "12"):
+            _gcc_dir = f"/usr/lib/gcc/x86_64-linux-gnu/{_gcc_ver}"
+            if os.path.isdir(_gcc_dir):
+                extra_cuda_cflags.append(f"--gcc-install-dir={_gcc_dir}")
+                break
     else:
         extra_cuda_cflags += ["--forward-unknown-opts", "--expt-relaxed-constexpr"]
 

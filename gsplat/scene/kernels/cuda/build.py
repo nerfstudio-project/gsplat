@@ -34,15 +34,60 @@ NINJA_STATUS = os.getenv("NINJA_STATUS")
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 
 
+def _rocm_lib_dir() -> str | None:
+    """Locate the pip ROCm SDK lib dir holding libamdhip64.
+
+    torch resolves ROCM_HOME from the hipcc on PATH, so it emits
+    ``-L<venv>/lib -lamdhip64`` — but the runtime lib actually lives in the
+    ``_rocm_sdk_devel`` site-package. Return that dir so the JIT link can find
+    libamdhip64; None when no pip SDK is present (e.g. system /opt/rocm).
+    """
+    import site
+
+    candidates = list(site.getsitepackages())
+    user_site = site.getusersitepackages()
+    if user_site:
+        candidates.append(user_site)
+    for sp in candidates:
+        for name in ("_rocm_sdk_devel", "_rocm_sdk_core"):
+            lib = os.path.join(sp, name, "lib")
+            if os.path.exists(os.path.join(lib, "libamdhip64.so")):
+                return lib
+    return None
+
+
+def _rocm_sdk_include_dir() -> str | None:
+    """Locate the pip ROCm SDK include dir that ships hipsparse/hipsparse.h.
+
+    torch emits its ROCm includes from ``_rocm_sdk_core``, but torch's own
+    ``ATen/hip`` headers pull in ``hipsparse/hipsparse.h`` which only ships in
+    ``_rocm_sdk_devel``. Return that include dir so it can be added via
+    ``-isystem``; None when no pip SDK is present (e.g. system /opt/rocm).
+    """
+    import site
+
+    candidates = list(site.getsitepackages())
+    user_site = site.getusersitepackages()
+    if user_site:
+        candidates.append(user_site)
+    for sp in candidates:
+        for name in ("_rocm_sdk_devel", "_rocm_sdk_core"):
+            inc = os.path.join(sp, name, "include")
+            if os.path.isfile(os.path.join(inc, "hipsparse", "hipsparse.h")):
+                return inc
+    return None
+
+
 def get_build_parameters() -> SimpleNamespace:
     name = "gsplat_scene_cuda"
+    # The csrc dir holds the .cuh header included by the sources. On ROCm,
+    # torch's JIT hipify only hipifies headers it can find via
+    # header_include_dirs (fed from extra_include_paths); without this the .cuh
+    # is never hipified/copied into the generated hip/csrc tree.
+    extra_include_paths: list[str] = [os.path.join(PATH, "csrc")]
     sources = [
         os.path.join(PATH, "ext.cpp"),
         os.path.join(PATH, "csrc", "gaussian_scene_pack.cpp"),
-    ]
-    torch_include_paths = set(jit.include_paths("cpu"))
-    extra_include_paths: list[str] = [
-        path for path in jit.include_paths("cuda") if path not in torch_include_paths
     ]
 
     extra_cflags: list[str] = []
@@ -51,7 +96,7 @@ def get_build_parameters() -> SimpleNamespace:
     if sys.platform == "win32":
         extra_cflags = ["/std:c++17", "-DWIN32_LEAN_AND_MEAN"]
     else:
-        extra_cflags = ["-std=c++17"]
+        extra_cflags = ["-std=c++20"]
 
     extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
     if os.name != "nt":
@@ -59,18 +104,14 @@ def get_build_parameters() -> SimpleNamespace:
 
     if torch.version.hip:
         extra_cflags += ["-DUSE_ROCM", "-U__HIP_NO_HALF_CONVERSIONS__"]
-        torch_cuda_libs = ["c10_hip", "torch_hip"]
-    else:
-        torch_cuda_libs = ["c10_cuda", "torch_cuda"]
-
-    if sys.platform == "win32":
-        extra_ldflags += [
-            os.path.join(jit.TORCH_LIB_PATH, f"{lib}.lib") for lib in torch_cuda_libs
-        ]
-    else:
-        extra_ldflags += [
-            os.path.join(jit.TORCH_LIB_PATH, f"lib{lib}.so") for lib in torch_cuda_libs
-        ]
+        rocm_lib = _rocm_lib_dir()
+        if rocm_lib is not None:
+            extra_ldflags += [f"-L{rocm_lib}", f"-Wl,-rpath,{rocm_lib}"]
+        # hipsparse.h (pulled in by torch's ATen/hip headers) ships only in the
+        # _rocm_sdk_devel include tree, which torch's JIT does not add.
+        rocm_inc = _rocm_sdk_include_dir()
+        if rocm_inc is not None:
+            extra_cflags += [f"-isystem{rocm_inc}"]
 
     return SimpleNamespace(
         name=name,
@@ -156,6 +197,7 @@ def build_and_load_scene_cuda():
                 extra_include_paths=build_params.extra_include_paths,
                 extra_ldflags=build_params.extra_ldflags,
                 build_directory=build_dir,
+                with_cuda=True,
                 verbose=VERBOSE,
             )
     except OSError as jit_error:

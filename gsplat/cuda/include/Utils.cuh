@@ -21,12 +21,22 @@
 #include "Common.h"
 #include "Utils.h"
 
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAStream.h>
+#ifdef USE_ROCM
+#    include <hip/hip_runtime.h>
+#else
+#    include <c10/cuda/CUDAException.h>
+#    include <c10/cuda/CUDAStream.h>
+#endif
 #include <c10/util/irange.h>
-#ifdef __CUDACC__
-#    include <cooperative_groups.h>
-#    include <cooperative_groups/reduce.h>
+#if defined(__CUDACC__) || defined(__HIP__)
+#    ifndef USE_ROCM
+#        include <cooperative_groups.h>
+#        include <cooperative_groups/reduce.h>
+#    else
+#        include <hip/hip_cooperative_groups.h>
+#        include <rocprim/warp/warp_reduce.hpp>
+#        include <rocprim/functional.hpp>
+#    endif
 #endif
 #include <cuda/std/limits>
 #include <cuda/std/type_traits>
@@ -36,7 +46,7 @@
 
 namespace gsplat
 {
-#ifdef __CUDACC__
+#if defined(__CUDACC__) || defined(__HIP__)
 namespace cg = cooperative_groups;
 #endif
 
@@ -149,6 +159,7 @@ inline __device__ void covarW2C_VJP(
 // Reduce
 ///////////////////////////////
 
+#ifndef USE_ROCM
 #ifdef __CUDACC__
 template<uint32_t DIM, class WarpT>
 inline __device__ void warpSum(float *val, WarpT &warp)
@@ -218,6 +229,392 @@ template<class WarpT>
 inline __device__ void warpMax(float &val, WarpT &warp)
 {
     val = cg::reduce(warp, val, cg::greater<float>());
+}
+#endif
+#else
+
+// --- Warp Reduction Helpers ---
+
+// Helper to find the lowest active lane in a mask (leader election)
+// Using 'inline' to avoid multiple definition errors across compilation units.
+inline __device__ int get_leader_lane_id(unsigned long long mask) {  
+    // Return first active lane in the mask, or -1 if mask is empty  
+    return mask ? __ffsll(mask) - 1 : -1;  // __ffsll returns 1-based position of first set bit  
+}  
+
+
+// --- Manual Dynamic Labeled Reduction Implementations ---
+// These are provided for comparison if cooperative_groups::labeled_partition and cg::reduce is not available
+// or for specific performance tuning, though `labeled_partition` is generally efficient.
+
+inline __device__ int32_t reduce_max_shuffle(int32_t val) {
+    const unsigned long long mask = 0xFFFFFFFFFFFFFFFFULL;
+
+    #pragma unroll
+    for (int offset = 32; offset > 0; offset /= 2) {
+        val = max(val, __shfl_down_sync(mask, val, offset));
+    }
+    
+    // Broadcast result from thread 0 to all threads in the group
+    return __shfl_sync(mask, val, 0);
+}
+
+inline __device__ void manual_warpSum(float& val) {  
+    unsigned long long warp_mask = __activemask();
+      
+    // Perform warp-level sum  
+    for (int offset = 32 ; offset > 0; offset /= 2) {  
+        float other = __shfl_down_sync(warp_mask, val, offset);  
+        val += other;  
+    }  
+      
+    // Broadcast result from lane 0 to all threads in warp  
+    val = __shfl_sync(warp_mask, val, 0);  
+}  
+  
+// For vec2 type  
+inline __device__ void manual_warpSum(vec2& v) {  
+    float x = v.x;  
+    float y = v.y;  
+      
+    manual_warpSum(x);  
+    manual_warpSum(y);
+      
+    v.x = x;  
+    v.y = y;  
+}  
+  
+// For vec3 type  
+inline __device__ void manual_warpSum(vec3& v) {  
+    float x = v.x;  
+    float y = v.y;  
+    float z = v.z;  
+      
+    manual_warpSum(x);  
+    manual_warpSum(y);  
+    manual_warpSum(z);  
+      
+    v.x = x;  
+    v.y = y;  
+    v.z = z;  
+}
+
+// For vec4 type  
+inline __device__ void manual_warpSum(vec4& v) {  
+    float x = v.x;  
+    float y = v.y;  
+    float z = v.z;
+    float w = v.w;  
+      
+    manual_warpSum(x);  
+    manual_warpSum(y);  
+    manual_warpSum(z); 
+    manual_warpSum(w); 
+      
+    v.x = x;  
+    v.y = y;  
+    v.z = z;
+    v.w = w; 
+}
+  
+// For array type (like v_rgb_local)  
+template <int N>  
+inline __device__ void manual_warpSum(float val[N]) {  
+    for (int i = 0; i < N; i++) {  
+        manual_warpSum(val[i]);  
+    }  
+}
+
+template<int LOGICAL_WARP_SIZE = 64>
+__device__ inline void rocprim_warpSum_scalar(float& val, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+            warp_storage_base)
+{
+    using warp_reduce_t = rocprim::warp_reduce<float, LOGICAL_WARP_SIZE>;
+    //constexpr int NUM_WARPS = BLOCK_SIZE / LOGICAL_WARP_SIZE;
+
+    // One storage object per logical warp inside the block
+    // __shared__ typename warp_reduce_t::storage_type
+    //     warp_storage[NUM_WARPS];
+
+    const int warp_id = threadIdx.x / LOGICAL_WARP_SIZE;
+    warp_reduce_t wreduce;
+    float sum;
+    wreduce.reduce(val,                       
+                   sum,
+                   warp_storage_base[warp_id],    
+                   rocprim::plus<float>());
+    val = sum;
+}
+
+//-----------------------------------------------------------------------------
+//  1. float overload  ────────────────────────────────────────────────────────
+template<int LOGICAL_WARP_SIZE = 64>
+__device__ inline void rocprim_warpSum(float& x, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                    warp_storage_base)
+{
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(x, warp_storage_base);
+}
+
+//-----------------------------------------------------------------------------
+//  2. vec2 / vec3 / vec4 overloads  ─────────────────────────────────────────-
+template<int LOGICAL_WARP_SIZE = 64>
+__device__ inline void rocprim_warpSum(vec2& v, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                    warp_storage_base)
+{
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.x, warp_storage_base);
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.y, warp_storage_base);
+}
+
+template<int LOGICAL_WARP_SIZE = 64>
+__device__ inline void rocprim_warpSum(vec3& v, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                    warp_storage_base)
+{
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.x, warp_storage_base);
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.y, warp_storage_base);
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.z, warp_storage_base);
+}
+
+template<int LOGICAL_WARP_SIZE = 64>
+__device__ inline void rocprim_warpSum(vec4& v, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                    warp_storage_base)
+{
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.x, warp_storage_base);
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.y, warp_storage_base);
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.z, warp_storage_base);
+    rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.w, warp_storage_base);
+}
+
+//-----------------------------------------------------------------------------
+//  3. fixed-size float array overload  ───────────────────────────────────────
+template<int N, int LOGICAL_WARP_SIZE = 64>
+__device__ inline void rocprim_warpSum(float (&a)[N], typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                    warp_storage_base)
+{
+    #pragma unroll
+    for (int i = 0; i < N; ++i)
+        rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(a[i], warp_storage_base);
+}
+
+inline __device__ void manual_dynamic_reduce_sum_vec2(  
+    vec2&              val_in_out,  
+    long long          current_label,  
+    int                warp_thread_id,  
+    unsigned long long      warp_active_mask  
+) {  
+    // First, create a mask of all threads with matching labels  
+    unsigned long long my_label_mask = 0;  
+    for (int i = 0; i < 64; ++i) {  
+        if (warp_active_mask & (1ULL << i)) {  
+            long long lane_label = __shfl_sync(warp_active_mask, current_label, i);  
+            if (lane_label == current_label) {  
+                my_label_mask |= (1ULL << i);  
+            }  
+        }  
+    }  
+      
+    // If this thread doesn't have this label or no threads have this label, return early  
+    if (my_label_mask == 0 || !(my_label_mask & (1ULL << warp_thread_id))) {  
+        return;  
+    }  
+      
+    // Find the leader lane for this label group  
+    int leader_lane = get_leader_lane_id(my_label_mask);  
+      
+    // Perform a more robust reduction with explicit control  
+    float sum_x = val_in_out.x;  
+    float sum_y = val_in_out.y;  
+      
+    // Use a mask-based reduction approach with progressive halving  
+    for (unsigned long long mask = my_label_mask & ~(1ULL << warp_thread_id); mask != 0; ) {  
+        int src_lane = __ffsll(mask) - 1;  
+        mask &= ~(1ULL << src_lane);  
+          
+        sum_x += __shfl_sync(my_label_mask, val_in_out.x, src_lane);  
+        sum_y += __shfl_sync(my_label_mask, val_in_out.y, src_lane);  
+    }  
+      
+    // Leader thread accumulates the final sum  
+    if (warp_thread_id == leader_lane) {  
+        val_in_out.x = sum_x;  
+        val_in_out.y = sum_y;  
+    }  
+      
+    // Broadcast the result from the leader to all threads with the same label  
+    val_in_out.x = __shfl_sync(my_label_mask, val_in_out.x, leader_lane);  
+    val_in_out.y = __shfl_sync(my_label_mask, val_in_out.y, leader_lane);  
+} 
+
+
+inline __device__ void manual_dynamic_reduce_sum_vec3(  
+    vec3&              val_in_out,  
+    long long          current_label,  
+    int                warp_thread_id,  
+    unsigned long long      warp_active_mask  
+) {  
+    // First, create a mask of all threads with matching labels  
+    unsigned long long my_label_mask = 0;  
+    for (int i = 0; i < 64; ++i) {  
+        if (warp_active_mask & (1ULL << i)) {  
+            long long lane_label = __shfl_sync(warp_active_mask, current_label, i);  
+            if (lane_label == current_label) {  
+                my_label_mask |= (1ULL << i);  
+            }  
+        }  
+    }  
+      
+    // If this thread doesn't have this label or no threads have this label, return early  
+    if (my_label_mask == 0 || !(my_label_mask & (1ULL << warp_thread_id))) {  
+        return;  
+    }  
+      
+    // Find the leader lane for this label group  
+    int leader_lane = get_leader_lane_id(my_label_mask);  
+      
+    // Perform a more robust reduction with explicit control  
+    float sum_x = val_in_out.x;  
+    float sum_y = val_in_out.y;  
+    float sum_z = val_in_out.z;  
+      
+    // Use a mask-based reduction approach with progressive halving  
+    for (unsigned long long mask = my_label_mask & ~(1ULL << warp_thread_id); mask != 0; ) {  
+        int src_lane = __ffsll(mask) - 1;  
+        mask &= ~(1ULL << src_lane);  
+          
+        sum_x += __shfl_sync(my_label_mask, val_in_out.x, src_lane);  
+        sum_y += __shfl_sync(my_label_mask, val_in_out.y, src_lane);  
+        sum_z += __shfl_sync(my_label_mask, val_in_out.z, src_lane);  
+    }  
+      
+    // Leader thread accumulates the final sum  
+    if (warp_thread_id == leader_lane) {  
+        val_in_out.x = sum_x;  
+        val_in_out.y = sum_y;  
+        val_in_out.z = sum_z;  
+    }  
+      
+    // Broadcast the result from the leader to all threads with the same label  
+    val_in_out.x = __shfl_sync(my_label_mask, val_in_out.x, leader_lane);  
+    val_in_out.y = __shfl_sync(my_label_mask, val_in_out.y, leader_lane);  
+    val_in_out.z = __shfl_sync(my_label_mask, val_in_out.z, leader_lane);  
+}  
+  
+inline __device__ void manual_dynamic_reduce_sum_vec4(  
+    vec4&              val_in_out,  
+    long long          current_label,  
+    int                warp_thread_id,  
+    unsigned long long      warp_active_mask  
+) {  
+    // First, create a mask of all threads with matching labels  
+    unsigned long long my_label_mask = 0;  
+    for (int i = 0; i < 64; ++i) {  
+        if (warp_active_mask & (1ULL << i)) {  
+            long long lane_label = __shfl_sync(warp_active_mask, current_label, i);  
+            if (lane_label == current_label) {  
+                my_label_mask |= (1ULL << i);  
+            }  
+        }  
+    }  
+      
+    // If this thread doesn't have this label or no threads have this label, return early  
+    if (my_label_mask == 0 || !(my_label_mask & (1ULL << warp_thread_id))) {  
+        return;  
+    }  
+      
+    // Find the leader lane for this label group  
+    int leader_lane = get_leader_lane_id(my_label_mask);  
+      
+    // Perform a more robust reduction with explicit control  
+    float sum_x = val_in_out.x;  
+    float sum_y = val_in_out.y;  
+    float sum_z = val_in_out.z;  
+    float sum_w = val_in_out.w;  
+      
+    // Use a mask-based reduction approach with progressive halving  
+    for (unsigned long long mask = my_label_mask & ~(1ULL << warp_thread_id); mask != 0; ) {  
+        int src_lane = __ffsll(mask) - 1;  
+        mask &= ~(1ULL << src_lane);  
+          
+        sum_x += __shfl_sync(my_label_mask, val_in_out.x, src_lane);  
+        sum_y += __shfl_sync(my_label_mask, val_in_out.y, src_lane);  
+        sum_z += __shfl_sync(my_label_mask, val_in_out.z, src_lane);  
+        sum_w += __shfl_sync(my_label_mask, val_in_out.w, src_lane);  
+    }  
+      
+    // Leader thread accumulates the final sum  
+    if (warp_thread_id == leader_lane) {  
+        val_in_out.x = sum_x;  
+        val_in_out.y = sum_y;  
+        val_in_out.z = sum_z;  
+        val_in_out.w = sum_w;  
+    }  
+      
+    // Broadcast the result from the leader to all threads with the same label  
+    val_in_out.x = __shfl_sync(my_label_mask, val_in_out.x, leader_lane);  
+    val_in_out.y = __shfl_sync(my_label_mask, val_in_out.y, leader_lane);  
+    val_in_out.z = __shfl_sync(my_label_mask, val_in_out.z, leader_lane);  
+    val_in_out.w = __shfl_sync(my_label_mask, val_in_out.w, leader_lane);  
+}  
+  
+inline __device__ void manual_dynamic_reduce_sum_mat3(  
+    mat3&              val_in_out,  
+    long long          current_label,  
+    int                warp_thread_id,  
+    unsigned long long      warp_active_mask  
+) {  
+    // First, create a mask of all threads with matching labels  
+    unsigned long long my_label_mask = 0;  
+    for (int i = 0; i < 64; ++i) {  
+        if (warp_active_mask & (1ULL << i)) {  
+            long long lane_label = __shfl_sync(warp_active_mask, current_label, i);  
+            if (lane_label == current_label) {  
+                my_label_mask |= (1ULL << i);  
+            }  
+        }  
+    }  
+      
+    // If this thread doesn't have this label or no threads have this label, return early  
+    if (my_label_mask == 0 || !(my_label_mask & (1ULL << warp_thread_id))) {  
+        return;  
+    }  
+      
+    // Find the leader lane for this label group  
+    int leader_lane = get_leader_lane_id(my_label_mask);  
+      
+    // Perform a more robust reduction with explicit control  
+    float sum[3][3];  
+    for (int col = 0; col < 3; ++col) {  
+        for (int row = 0; row < 3; ++row) {  
+            sum[col][row] = val_in_out[col][row];  
+        }  
+    }  
+      
+    // Use a mask-based reduction approach   
+    for (unsigned long long mask = my_label_mask & ~(1ULL << warp_thread_id); mask != 0; ) {  
+        int src_lane = __ffsll(mask) - 1;  
+        mask &= ~(1ULL << src_lane);  
+          
+        for (int col = 0; col < 3; ++col) {  
+            for (int row = 0; row < 3; ++row) {  
+                sum[col][row] += __shfl_sync(my_label_mask, val_in_out[col][row], src_lane);  
+            }  
+        }  
+    }  
+      
+    // Leader thread accumulates the final sum  
+    if (warp_thread_id == leader_lane) {  
+        for (int col = 0; col < 3; ++col) {  
+            for (int row = 0; row < 3; ++row) {  
+                val_in_out[col][row] = sum[col][row];  
+            }  
+        }  
+    }  
+      
+    // Broadcast the result from the leader to all threads with the same label  
+    for (int col = 0; col < 3; ++col) {  
+        for (int row = 0; row < 3; ++row) {  
+            val_in_out[col][row] = __shfl_sync(my_label_mask, val_in_out[col][row], leader_lane);  
+        }  
+    }
 }
 #endif
 
@@ -574,12 +971,22 @@ inline __device__ void persp_proj(
     const float cy,
     const uint32_t width,
     const uint32_t height,
+#if USE_ROCM
+    const float near_plane,
+#endif
     // outputs
     mat2 &cov2d,
     vec2 &mean2d
 )
 {
     float x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+#if USE_ROCM
+    // Clamp depth to avoid instability near z ~= 0.
+    const float kMinDepth = 1e-4f;
+    const float min_depth = fmaxf(near_plane, kMinDepth);
+    float z_safe = fabsf(z) < min_depth ? copysignf(min_depth, z) : z;
+#endif
 
     float tan_fovx  = 0.5f * width / fx;
     float tan_fovy  = 0.5f * height / fy;
@@ -588,10 +995,17 @@ inline __device__ void persp_proj(
     float lim_y_pos = (height - cy) / fy + 0.3f * tan_fovy;
     float lim_y_neg = cy / fy + 0.3f * tan_fovy;
 
+#if USE_ROCM
+    float rz  = 1.f / z_safe;
+    float rz2 = rz * rz;
+    float tx  = z_safe * min(lim_x_pos, max(-lim_x_neg, x * rz));
+    float ty  = z_safe * min(lim_y_pos, max(-lim_y_neg, y * rz));
+#else
     float rz  = 1.f / z;
     float rz2 = rz * rz;
     float tx  = z * glm::min(lim_x_pos, glm::max(-lim_x_neg, x * rz));
     float ty  = z * glm::min(lim_y_pos, glm::max(-lim_y_neg, y * rz));
+#endif
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2 J = mat3x2(
@@ -626,6 +1040,12 @@ inline __device__ void persp_proj_vjp(
 {
     float x = mean3d[0], y = mean3d[1], z = mean3d[2];
 
+#if USE_ROCM
+    // Clamp depth in backward to avoid exploding gradients near z ~= 0.
+    const float kMinDepth = 1e-4f;
+    float z_safe = fabsf(z) < kMinDepth ? copysignf(kMinDepth, z) : z;
+#endif
+
     float tan_fovx  = 0.5f * width / fx;
     float tan_fovy  = 0.5f * height / fy;
     float lim_x_pos = (width - cx) / fx + 0.3f * tan_fovx;
@@ -633,10 +1053,17 @@ inline __device__ void persp_proj_vjp(
     float lim_y_pos = (height - cy) / fy + 0.3f * tan_fovy;
     float lim_y_neg = cy / fy + 0.3f * tan_fovy;
 
+#if USE_ROCM
+    float rz  = 1.f / z_safe;
+    float rz2 = rz * rz;
+    float tx  = z_safe * min(lim_x_pos, max(-lim_x_neg, x * rz));
+    float ty  = z_safe * min(lim_y_pos, max(-lim_y_neg, y * rz));
+#else
     float rz  = 1.f / z;
     float rz2 = rz * rz;
     float tx  = z * glm::min(lim_x_pos, glm::max(-lim_x_neg, x * rz));
     float ty  = z * glm::min(lim_y_pos, glm::max(-lim_y_neg, y * rz));
+#endif
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2 J = mat3x2(
