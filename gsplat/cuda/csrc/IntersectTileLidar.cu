@@ -22,7 +22,12 @@
 
 // for CUB_WRAPPER
 #include <c10/cuda/CUDACachingAllocator.h>
-#include <cub/cub.cuh>
+#if USE_ROCM
+#    include <hipcub/device/device_radix_sort.hpp>
+#    include <hipcub/util_type.hpp>
+#else
+#    include <cub/cub.cuh>
+#endif
 
 #include "Common.h"
 #include "Intersect.h"

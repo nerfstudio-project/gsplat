@@ -347,6 +347,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
             const dim3 threads       = dim3{CTA_SIZE, 1, 1};
             const int64_t shmem_size = CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 
+#    ifndef USE_ROCM
             if(cudaFuncSetAttribute(
                    rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
                    cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -360,12 +361,28 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
                     " bytes), try lowering tile_size."
                 );
             }
+#    else
+            hipError_t err = hipFuncSetAttribute(
+                reinterpret_cast<void *>(rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>),
+                hipFuncAttributeMaxDynamicSharedMemorySize,
+                static_cast<int>(shmem_size)
+            );
+            if(err != hipSuccess)
+            {
+                AT_ERROR(
+                    "Failed to set maximum shared memory size (requested ",
+                    shmem_size,
+                    " bytes), try lowering tile_size. HIP Error: ",
+                    hipGetErrorString(err)
+                );
+            }
+#    endif
 
             const float *bg_ptr   = backgrounds.has_value() ? backgrounds.value().const_data_ptr<float>() : nullptr;
             const bool *masks_ptr = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
 
             rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
-                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                <<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
                     N,
                     n_isects,
                     packed,
@@ -471,6 +488,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
             for(const auto device_id: c10::irange(c10::cuda::device_count()))
             {
                 C10_CUDA_CHECK(cudaSetDevice(device_id));
+#    ifndef USE_ROCM
                 if(cudaFuncSetAttribute(
                        rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
                        cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -484,7 +502,23 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
                         " bytes), try lowering tile_size."
                     );
                 }
-                auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+#    else
+                hipError_t err = hipFuncSetAttribute(
+                    reinterpret_cast<void *>(rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>),
+                    hipFuncAttributeMaxDynamicSharedMemorySize,
+                    static_cast<int>(shmem_size)
+                );
+                if(err != hipSuccess)
+                {
+                    AT_ERROR(
+                        "Failed to set maximum shared memory size (requested ",
+                        shmem_size,
+                        " bytes), try lowering tile_size. HIP Error: ",
+                        hipGetErrorString(err)
+                    );
+                }
+#    endif
+                auto stream = GET_CURRENT_STREAM();
 
                 int64_t block_offset, block_count;
                 std::tie(block_offset, block_count) = chunk(n_tiles, device_id);

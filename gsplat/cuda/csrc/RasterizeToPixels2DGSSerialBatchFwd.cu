@@ -521,6 +521,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     {
         constexpr uint32_t CDIM = ChannelsT::value;
 
+#    ifndef USE_ROCM
         if(cudaFuncSetAttribute(
                rasterize_to_pixels_2dgs_fwd_kernel<CDIM, float>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_size
            )
@@ -530,9 +531,25 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
                 "Failed to set maximum shared memory size (requested ", shmem_size, " bytes), try lowering tile_size."
             );
         }
+#    else
+        hipError_t err = hipFuncSetAttribute(
+            reinterpret_cast<void *>(rasterize_to_pixels_2dgs_fwd_kernel<CDIM, float>),
+            hipFuncAttributeMaxDynamicSharedMemorySize,
+            static_cast<int>(shmem_size)
+        );
+        if(err != hipSuccess)
+        {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size,
+                " bytes), try lowering tile_size. HIP Error: ",
+                hipGetErrorString(err)
+            );
+        }
+#    endif
 
         rasterize_to_pixels_2dgs_fwd_kernel<CDIM, float>
-            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            <<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
                 I,
                 N,
                 n_isects,

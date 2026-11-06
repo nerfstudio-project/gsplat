@@ -26,6 +26,7 @@
 #include <cstdint>
 
 #include "Utils.h"
+#include "WarpSync.h"
 
 #include "Constants.h"
 #include "IntersectMTConfig.h"
@@ -246,7 +247,7 @@ inline __device__ int32_t find_macro_tile(
         const int32_t range   = hi - lo;
         const int32_t probe   = lo + div33(range, lane + 1);
         const bool take_more  = (offsets[probe + 1] <= key);
-        const uint32_t ballot = __ballot_sync(~0u, take_more);
+        const uint32_t ballot = WarpBallot32(take_more);
         const int32_t n_true  = __popc(ballot);
 
         // 32 probes create 33 sub-intervals. n_true tells us which one

@@ -23,9 +23,14 @@
 #include <ATen/ops/zeros.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
-#include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
-#include <cub/block/block_reduce.cuh>
+#if USE_ROCM
+#    include <hip/hip_cooperative_groups.h>
+#    include <hipcub/block/block_reduce.hpp>
+#else
+#    include <cooperative_groups.h>
+#    include <cooperative_groups/reduce.h>
+#    include <cub/block/block_reduce.cuh>
+#endif
 
 #include "SphericalHarmonics.h"
 #include "SphericalHarmonics.cuh"
@@ -217,6 +222,51 @@ namespace
         const int64_t image_id = batch_ids[elem_id] * C + camera_ids[elem_id];
         const float *v_dir     = v_viewdirs + elem_id * 3;
         ViewDirectionGradient local{v_dir[0], v_dir[1], v_dir[2]};
+#if USE_ROCM
+        // HIP lacks labeled_partition/reduce; sum lanes sharing image_id with a
+        // shuffle-based labeled warp reduction (64-wide wavefront) and let the
+        // group's leader lane issue the atomic.
+        const unsigned long long active_mask = __activemask();
+        const int                warp_lane   = threadIdx.x % warpSize;
+        const long long          my_label    = static_cast<long long>(image_id);
+
+        unsigned long long label_mask = 0;
+        for(int i = 0; i < warpSize; ++i)
+        {
+            if(active_mask & (1ULL << i))
+            {
+                long long lane_label = __shfl_sync(active_mask, my_label, i);
+                if(lane_label == my_label)
+                {
+                    label_mask |= (1ULL << i);
+                }
+            }
+        }
+
+        float sum_x = local.x;
+        float sum_y = local.y;
+        float sum_z = local.z;
+        for(unsigned long long mask = label_mask & ~(1ULL << warp_lane); mask != 0;)
+        {
+            const int src_lane = __ffsll(mask) - 1;
+            mask &= ~(1ULL << src_lane);
+            sum_x += __shfl_sync(label_mask, local.x, src_lane);
+            sum_y += __shfl_sync(label_mask, local.y, src_lane);
+            sum_z += __shfl_sync(label_mask, local.z, src_lane);
+        }
+        local.x = sum_x;
+        local.y = sum_y;
+        local.z = sum_z;
+
+        const int leader_lane = __ffsll(label_mask) - 1;
+        if(warp_lane == leader_lane)
+        {
+            float *reduced_v_dir = reduced_v_viewdirs + image_id * 3;
+            gpuAtomicAdd(reduced_v_dir, local.x);
+            gpuAtomicAdd(reduced_v_dir + 1, local.y);
+            gpuAtomicAdd(reduced_v_dir + 2, local.z);
+        }
+#else
         auto active_threads = cg::coalesced_threads();
         auto image_threads  = cg::labeled_partition(active_threads, static_cast<int>(image_id));
         local.x             = cg::reduce(image_threads, local.x, cg::plus<float>());
@@ -230,6 +280,7 @@ namespace
             gpuAtomicAdd(reduced_v_dir + 1, local.y);
             gpuAtomicAdd(reduced_v_dir + 2, local.z);
         }
+#endif
     }
 
     __global__ __launch_bounds__(kShReductionThreads) void view_direction_gradients_to_viewmats(

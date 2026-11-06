@@ -111,7 +111,9 @@ static void launch_fused_mt_binning_impl(
     auto launch = [&](auto kernel_fn)
     {
         if(smem_bytes > 48 * 1024
-           && cudaFuncSetAttribute(kernel_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes) != cudaSuccess)
+           && cudaFuncSetAttribute(
+                  reinterpret_cast<const void *>(kernel_fn), cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes
+              ) != cudaSuccess)
         {
             AT_ERROR(
                 "Failed to set shared memory size for fused macro-tile binning kernel (requested ",

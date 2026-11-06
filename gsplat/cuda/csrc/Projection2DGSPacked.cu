@@ -22,12 +22,13 @@
 
 #    include <ATen/Dispatch.h>
 #    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
+#    include "ATenAtomic.cuh"
 #    include <c10/cuda/CUDAStream.h>
 #    include <cooperative_groups.h>
 #    include <cub/cub.cuh>
 
 #    include "Common.h"
+#    include "Common.cuh"
 #    include "Projection.h"
 #    include "Projection2DGS.cuh" // Utils for 2DGS Projection
 #    include "Utils.cuh"
@@ -296,7 +297,7 @@ void launch_projection_2dgs_packed_fwd_kernel(
         return;
     }
 
-    projection_2dgs_packed_fwd_kernel<float><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+    projection_2dgs_packed_fwd_kernel<float><<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
         B,
         C,
         N,
@@ -440,6 +441,10 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     );
 
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+
+    unsigned int warp_thread_id = threadIdx.x % 64;
+    unsigned long long warp_active_mask = __activemask();
+
     if(sparse_grad)
     {
         // write out results with sparse layout
@@ -466,6 +471,59 @@ __global__ void projection_2dgs_packed_bwd_kernel(
         // write out results with dense layout
         // #if __CUDA_ARCH__ >= 700
         // write out results with warp-level reduction
+
+        #if USE_ROCM
+        if(v_means != nullptr)
+        {
+            manual_dynamic_reduce_sum_vec3(v_mean, gid, warp_thread_id, warp_active_mask);
+
+            unsigned long long my_gid_mask = 0;
+            for(int i = 0; i < 64; ++i)
+            {
+                long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+                if((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid))
+                {
+                    my_gid_mask |= (1ULL << i);
+                }
+            }
+            int my_warp_leader_lane_id = get_leader_lane_id(my_gid_mask);
+
+            if(warp_thread_id == my_warp_leader_lane_id)
+            {
+                scalar_t *target_v_means_ptr = v_means + bid * N * 3 + gid * 3;
+                unsafeAtomicAdd(&(target_v_means_ptr[0]), static_cast<scalar_t>(v_mean.x));
+                unsafeAtomicAdd(&(target_v_means_ptr[1]), static_cast<scalar_t>(v_mean.y));
+                unsafeAtomicAdd(&(target_v_means_ptr[2]), static_cast<scalar_t>(v_mean.z));
+            }
+        }
+        manual_dynamic_reduce_sum_vec4(v_quat, gid, warp_thread_id, warp_active_mask);
+        manual_dynamic_reduce_sum_vec2(v_scale, gid, warp_thread_id, warp_active_mask);
+
+        {
+            unsigned long long my_gid_mask = 0;
+            for(int i = 0; i < 64; ++i)
+            {
+                long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+                if((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid))
+                {
+                    my_gid_mask |= (1ULL << i);
+                }
+            }
+            int my_warp_leader_lane_id = get_leader_lane_id(my_gid_mask);
+
+            if(warp_thread_id == my_warp_leader_lane_id)
+            {
+                scalar_t *target_v_quats_ptr  = v_quats + bid * N * 4 + gid * 4;
+                scalar_t *target_v_scales_ptr = v_scales + bid * N * 3 + gid * 3;
+                unsafeAtomicAdd(target_v_quats_ptr, static_cast<scalar_t>(v_quat.x));
+                unsafeAtomicAdd(target_v_quats_ptr + 1, static_cast<scalar_t>(v_quat.y));
+                unsafeAtomicAdd(target_v_quats_ptr + 2, static_cast<scalar_t>(v_quat.z));
+                unsafeAtomicAdd(target_v_quats_ptr + 3, static_cast<scalar_t>(v_quat.w));
+                unsafeAtomicAdd(target_v_scales_ptr, static_cast<scalar_t>(v_scale.x));
+                unsafeAtomicAdd(target_v_scales_ptr + 1, static_cast<scalar_t>(v_scale.y));
+            }
+        }
+        #else
         auto warp_group_g = cg::labeled_partition(warp, gid);
         if(v_means != nullptr)
         {
@@ -480,7 +538,6 @@ __global__ void projection_2dgs_packed_bwd_kernel(
                 }
             }
         }
-        // Directly output gradients w.r.t. the quaternion and scale
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);
         if(warp_group_g.thread_rank() == 0)
@@ -494,10 +551,41 @@ __global__ void projection_2dgs_packed_bwd_kernel(
             gpuAtomicAdd(v_scales, v_scale[0]);
             gpuAtomicAdd(v_scales + 1, v_scale[1]);
         }
+        #endif
     }
 
     if(v_viewmats != nullptr)
     {
+        #if USE_ROCM
+        manual_dynamic_reduce_sum_mat3(v_R, cid, warp_thread_id, warp_active_mask);
+        manual_dynamic_reduce_sum_vec3(v_t, cid, warp_thread_id, warp_active_mask);
+
+        unsigned long long my_cid_mask = 0;
+        for(int i = 0; i < 64; ++i)
+        {
+            long long lane_cid_temp = __shfl_sync(warp_active_mask, cid, i);
+            if((warp_active_mask & (1ULL << i)) && (lane_cid_temp == cid))
+            {
+                my_cid_mask |= (1ULL << i);
+            }
+        }
+        int my_warp_leader_lane_id_cid = get_leader_lane_id(my_cid_mask);
+
+        if(warp_thread_id == my_warp_leader_lane_id_cid)
+        {
+            scalar_t *target_v_viewmats_ptr = v_viewmats + bid * C * 16 + cid * 16;
+            for(uint32_t i = 0; i < 3; i++)
+            {
+                for(uint32_t j = 0; j < 3; j++)
+                {
+                    unsafeAtomicAdd(target_v_viewmats_ptr + i * 4 + j, static_cast<scalar_t>(v_R[j][i]));
+                }
+                if(i == 0) unsafeAtomicAdd(target_v_viewmats_ptr + i * 4 + 3, static_cast<scalar_t>(v_t.x));
+                if(i == 1) unsafeAtomicAdd(target_v_viewmats_ptr + i * 4 + 3, static_cast<scalar_t>(v_t.y));
+                if(i == 2) unsafeAtomicAdd(target_v_viewmats_ptr + i * 4 + 3, static_cast<scalar_t>(v_t.z));
+            }
+        }
+        #else
         auto warp_group_c = cg::labeled_partition(warp, cid);
         warpSum(v_R, warp_group_c);
         warpSum(v_t, warp_group_c);
@@ -515,8 +603,10 @@ __global__ void projection_2dgs_packed_bwd_kernel(
                 gpuAtomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
             }
         }
+        #endif
     }
 }
+
 
 void launch_projection_2dgs_packed_bwd_kernel(
     // fwd inputs
@@ -560,7 +650,7 @@ void launch_projection_2dgs_packed_bwd_kernel(
         return;
     }
 
-    projection_2dgs_packed_bwd_kernel<float><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+    projection_2dgs_packed_bwd_kernel<float><<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
         B,
         C,
         N,

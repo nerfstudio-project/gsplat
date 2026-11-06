@@ -130,6 +130,12 @@ constexpr uint32_t min_blocks_for_cdim()
     }
 }
 
+#ifdef USE_ROCM
+#    define GSPLAT_LAUNCH_BOUNDS_CTA(CDIM, CTA_SIZE) __launch_bounds__(CTA_SIZE)
+#else
+#    define GSPLAT_LAUNCH_BOUNDS_CTA(CDIM, CTA_SIZE) __launch_bounds__(CTA_SIZE, min_blocks_for_cdim<CDIM, CTA_SIZE>())
+#endif
+
 #undef GSPLAT_ARCH_MAX_BLOCKS_PER_SM
 #undef GSPLAT_MIN_CDIM_FOR_HINT
 #undef GSPLAT_MAX_CDIM_FOR_HINT

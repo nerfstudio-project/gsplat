@@ -25,6 +25,7 @@
 #include "SHCompression.h"
 #include "SphericalHarmonics.h"
 #include "Utils.h"
+#include "WarpSync.h"
 
 namespace higs
 {
@@ -52,7 +53,7 @@ __device__ int32_t CompactMask(
     constexpr int32_t NUM_WARPS = SHEVAL_CTA_SIZE / 32;
 
     // let NVCC know that warp_id is a warp uniform (doh!)
-    const int32_t warp_id = __shfl_sync(~0u, threadIdx.x >> 5, 0);
+    const int32_t warp_id = WarpShfl32(threadIdx.x >> 5, 0);
     const int32_t lane_id = threadIdx.x & 31;
 
     // broadcast arrays: warp 0 writes, all warps read after barrier
@@ -73,7 +74,7 @@ __device__ int32_t CompactMask(
 #pragma unroll
         for(int32_t delta = 1; delta < NUM_WARPS; delta <<= 1)
         {
-            const int32_t n = __shfl_up_sync(~0u, prefix, delta);
+            const int32_t n = WarpShflUp32(prefix, delta);
             if(lane_id >= delta)
             {
                 prefix += n;
