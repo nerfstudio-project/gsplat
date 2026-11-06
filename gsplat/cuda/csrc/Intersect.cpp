@@ -555,7 +555,7 @@ at::Tensor intersect_offset(
     CHECK_INPUT(isect_ids);
 
     auto opt           = isect_ids.options();
-    at::Tensor offsets = at::empty({I, tile_height, tile_width}, opt.dtype(at::kInt));
+    at::Tensor offsets = at::empty({I, tile_height, tile_width}, opt.dtype(at::kLong));
     launch_intersect_offset_kernel(isect_ids, I, tile_width, tile_height, offsets);
     return offsets;
 }
@@ -682,7 +682,7 @@ std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
 
     // Compacted per-active-tile offsets ([num_active_tiles + 1]).
     const int64_t num_active_tiles = active_tiles.size(0);
-    at::Tensor tile_offsets        = at::empty({num_active_tiles + 1}, active_tiles.options().dtype(at::kInt));
+    at::Tensor tile_offsets        = at::empty({num_active_tiles + 1}, active_tiles.options().dtype(at::kLong));
     launch_intersect_offset_sparse_kernel(isect_ids_sorted, active_tiles, tile_width, tile_height, tile_offsets);
 
     return std::make_tuple(tile_offsets, flatten_ids_sorted);
@@ -800,7 +800,7 @@ at::Tensor intersect_offset_privateuseone(
     CHECK_INPUT(isect_ids);
 
     auto opt           = isect_ids.options();
-    at::Tensor offsets = at::empty({I, tile_height, tile_width}, opt.dtype(at::kInt));
+    at::Tensor offsets = at::empty({I, tile_height, tile_width}, opt.dtype(at::kLong));
     launch_intersect_offset_kernels(isect_ids, I, tile_width, tile_height, offsets);
     return offsets;
 }

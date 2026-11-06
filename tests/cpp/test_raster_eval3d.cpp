@@ -658,6 +658,7 @@ private:
 
         const torch::TensorOptions f32_cuda = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
         const torch::TensorOptions i32_cuda = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32);
+        const torch::TensorOptions i64_cuda = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt64);
 
         at::Tensor means = torch::zeros({num_gaussians, 3}, f32_cuda);
         means.index_put_({Slice(), 2}, 1.0f + torch::arange(num_gaussians, f32_cuda) * 1.0e-3f);
@@ -681,7 +682,7 @@ private:
         },
             f32_cuda
         );
-        at::Tensor isect_offsets = torch::zeros({1, 1, 1}, i32_cuda);
+        at::Tensor isect_offsets = torch::zeros({1, 1, 1}, i64_cuda);
         at::Tensor flatten_ids   = torch::arange(num_gaussians, i32_cuda);
         at::Tensor background    = torch::tensor(
             {

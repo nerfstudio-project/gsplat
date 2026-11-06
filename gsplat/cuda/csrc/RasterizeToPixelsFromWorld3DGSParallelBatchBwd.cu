@@ -91,9 +91,9 @@ constexpr uint32_t cdim_smem_stride()
 // the `compute_batch_csr` host helper below. Kept `static` because only
 // this TU launches it directly.
 static __global__ void compute_batches_per_tile_kernel(
-    const int32_t *__restrict__ tile_offsets,
+    const int64_t *__restrict__ tile_offsets,
     const uint32_t num_tiles,
-    const uint32_t n_isects,
+    const int64_t n_isects,
     const int32_t pixels_per_tile,
     int32_t *__restrict__ batches_per_tile
 )
@@ -103,17 +103,18 @@ static __global__ void compute_batches_per_tile_kernel(
     {
         return;
     }
-    const int32_t start = tile_offsets[t];
-    const int32_t end   = (t + 1 < num_tiles) ? tile_offsets[t + 1] : static_cast<int32_t>(n_isects);
-    const int32_t range = end - start;
+    const int64_t start = tile_offsets[t];
+    const int64_t end   = (t + 1 < num_tiles) ? tile_offsets[t + 1] : n_isects;
+    const int64_t range = end - start;
     if(range <= 0)
     {
         batches_per_tile[t] = 0;
         return;
     }
     assert(pixels_per_tile > 0);
-    const int32_t num_batches = (range + pixels_per_tile - 1) / pixels_per_tile;
-    batches_per_tile[t]       = num_batches;
+    const int64_t num_batches = (range + pixels_per_tile - 1) / pixels_per_tile;
+    assert(num_batches <= INT32_MAX);
+    batches_per_tile[t] = static_cast<int32_t>(num_batches);
 }
 
 // Host helper: see declaration in `RasterizeCSR.cuh`. Launches the
@@ -135,9 +136,9 @@ std::tuple<at::Tensor, at::Tensor, int64_t> compute_batch_csr(
         const uint32_t threads_per_block = 256;
         const uint32_t blocks            = (num_tiles + threads_per_block - 1) / threads_per_block;
         compute_batches_per_tile_kernel<<<blocks, threads_per_block, 0, at::cuda::getCurrentCUDAStream()>>>(
-            tile_offsets.const_data_ptr<int32_t>(),
+            tile_offsets.const_data_ptr<int64_t>(),
             num_tiles,
-            static_cast<uint32_t>(n_isects),
+            n_isects,
             pixels_per_tile,
             batches_per_tile_t.data_ptr<int32_t>()
         );
@@ -272,7 +273,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const uint32_t n_isects,
+    const int64_t n_isects,
     // fwd inputs
     const vec3 *__restrict__ means,           // [B, N, 3]
     const vec4 *__restrict__ quats,           // [B, N, 4]
@@ -300,7 +301,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
     const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
     // intersections
-    const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
+    const int64_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
     const scalar_t *__restrict__ render_alphas, // [B, C, image_height, image_width, 1]
@@ -389,8 +390,8 @@ __global__ void rasterize_gradient_bwd_kernel(
         return;
     }
 
-    const int32_t range_start     = tile_offsets[tile_id];
-    const int32_t range_end       = (image_index == static_cast<int32_t>(B * C) - 1) && (tile_id == tiles_per_image - 1)
+    const int64_t range_start     = tile_offsets[tile_id];
+    const int64_t range_end       = (image_index == static_cast<int32_t>(B * C) - 1) && (tile_id == tiles_per_image - 1)
                                       ? n_isects
                                       : tile_offsets[tile_id + 1];
     const int32_t pixels_per_tile = tile_size * tile_size;
@@ -584,10 +585,13 @@ __global__ void rasterize_gradient_bwd_kernel(
 
     // ---- Batch walk: this CTA owns one front-aligned depth batch ----
     {
-        const int32_t batch_start = range_start + static_cast<int32_t>(block_size) * batch_id;
-        const int32_t batch_end   = min(range_end - 1, batch_start + static_cast<int32_t>(block_size) - 1);
-        const int32_t batch_size  = batch_end + 1 - batch_start;
-        const int32_t idx         = batch_end - static_cast<int32_t>(tr);
+        const int32_t batch_start_offset = static_cast<int32_t>(block_size) * batch_id;
+        const int64_t batch_start        = range_start + batch_start_offset;
+        const int64_t candidate_end      = batch_start + static_cast<int32_t>(block_size) - 1;
+        const int64_t batch_end          = candidate_end < range_end ? candidate_end : range_end - 1;
+        const int32_t batch_end_offset   = static_cast<int32_t>(batch_end - range_start);
+        const int32_t actual_batch_size  = batch_end_offset + 1 - batch_start_offset;
+        const int64_t idx                = batch_end - static_cast<int32_t>(tr);
 
         // Threads with tr >= batch_size would otherwise alias into the
         // previous front-side batch for the partial deepest batch.
@@ -617,10 +621,11 @@ __global__ void rasterize_gradient_bwd_kernel(
 
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        for(uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t)
+        const int32_t first_t = max(0, batch_end_offset - warp_bin_final);
+        for(uint32_t t = first_t; t < actual_batch_size; ++t)
         {
             bool valid = pixel_valid;
-            if(batch_end - t > bin_final)
+            if(batch_end_offset - t > bin_final)
             {
                 valid = 0;
             }
@@ -1021,7 +1026,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
     uint32_t I           = B * C;              // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width  = tile_offsets.size(-1);
-    uint32_t n_isects    = flatten_ids.size(0);
+    int64_t n_isects     = flatten_ids.size(0);
 
     dim3 threads = {tile_size, tile_size, 1};
     if(n_isects == 0)
@@ -1191,7 +1196,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
                 ftheta_device_coeffs,
                 lidar_device_coeffs,
                 external_distortion_device_params,
-                tile_offsets.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int64_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 render_alphas.const_data_ptr<float>(),
                 last_ids.const_data_ptr<int32_t>(),

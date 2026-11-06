@@ -478,7 +478,7 @@ def _isect_offset_encode(
 
     cum_tile_counts = torch.cumsum(tile_counts.flatten(), dim=0).reshape_as(tile_counts)
     offsets = cum_tile_counts - tile_counts
-    return offsets.int()
+    return offsets
 
 
 @torch.no_grad()
@@ -499,7 +499,7 @@ def _isect_tiles_sparse(
     Restricts the tile-intersection enumeration to the tiles flagged active in
     ``tile_mask`` and returns the *compacted* per-active-tile offset table:
 
-      * ``tile_offsets`` — int32 ``[num_active_tiles + 1]``. ``tile_offsets[i]``
+      * ``tile_offsets`` — int64 ``[num_active_tiles + 1]``. ``tile_offsets[i]``
         is the exclusive prefix-sum start of the flatten-id range for
         ``active_tiles[i]`` (active tiles in ascending dense-id order); the
         trailing sentinel ``tile_offsets[-1] == n_isects``.
@@ -580,7 +580,7 @@ def _isect_tiles_sparse(
     n_isects = len(f_ids)
     if n_isects == 0:
         tile_offsets = torch.zeros(
-            active_tiles.numel() + 1, dtype=torch.int32, device=device
+            active_tiles.numel() + 1, dtype=torch.int64, device=device
         )
         flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
         return tile_offsets, flatten_ids
@@ -597,9 +597,9 @@ def _isect_tiles_sparse(
 
     # Compacted offsets: first position of each active tile's range in g_sorted.
     active = active_tiles.to(torch.int64)
-    starts = torch.searchsorted(g_sorted, active, right=False).to(torch.int32)
+    starts = torch.searchsorted(g_sorted, active, right=False)
     tile_offsets = torch.cat(
-        [starts, torch.tensor([n_isects], dtype=torch.int32, device=device)]
+        [starts, torch.tensor([n_isects], dtype=torch.int64, device=device)]
     )
     return tile_offsets, flatten_ids
 

@@ -43,7 +43,7 @@ template<uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     const uint32_t I,                            // number of images
     const uint32_t N,                            // number of gaussians
-    const uint32_t n_isects,                     // number of ray-primitive intersections.
+    const int64_t n_isects,                      // number of ray-primitive intersections.
     const bool packed,                           // whether the input tensors are packed
     const vec2 *__restrict__ means2d,            // Projected Gaussian means. [..., N, 2] if
                                                  // packed is False, [nnz, 2] if packed is True.
@@ -70,7 +70,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]    //
+    const int64_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]    //
                                               // Intersection offsets outputs from
                                               // `isect_offset_encode()`, this is the
                                               // result of a prefix sum, and gives the
@@ -181,12 +181,12 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     // which gaussians to look through in this tile
 
     // print
-    int32_t range_start = tile_offsets[tile_id];
-    int32_t range_end =
+    const int64_t range_start = tile_offsets[tile_id];
+    const int64_t range_end =
         // see if this is the last tile in the image
         (image_id == I - 1) && (tile_id == tile_width * tile_height - 1) ? n_isects : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
-    uint32_t num_batches      = (range_end - range_start + block_size - 1) / block_size;
+    const int64_t num_batches = (range_end - range_start + block_size - 1) / block_size;
 
     /**
      * ==============================
@@ -217,9 +217,9 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     // numerical precision so we use double for it. However double make bwd 1.5x
     // slower so we stick with float for now.
     // The coefficient for volumetric rendering for our responsible pixel.
-    float T          = 1.0f;
-    // index of most recent gaussian to write to this thread's pixel
-    uint32_t cur_idx = 0;
+    float T                          = 1.0f;
+    // Tile-relative offset of the most recent intersection to contribute.
+    int32_t last_intersection_offset = 0;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
@@ -233,8 +233,8 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     float accum_vis_depth = 0.f; // accumulate vis * depth
 
     // keep track of median depth contribution
-    float median_depth  = 0.f;
-    uint32_t median_idx = 0.f;
+    float median_depth                 = 0.f;
+    int32_t median_intersection_offset = 0;
 
     /**
      * ==============================
@@ -249,7 +249,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     //  float pix_out[CDIM + 3] = {0.f}
     float pix_out[CDIM] = {0.f};
     float normal_out[3] = {0.f};
-    for(uint32_t b = 0; b < num_batches; ++b)
+    for(int64_t b = 0; b < num_batches; ++b)
     {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -260,8 +260,9 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        uint32_t batch_start = range_start + block_size * b;
-        uint32_t idx         = batch_start + tr;
+        const int64_t batch_offset = block_size * b;
+        const int64_t batch_start  = range_start + batch_offset;
+        const int64_t idx          = batch_start + tr;
 
         // only threads within the range of the tile will fetch gaussians
         /**
@@ -335,7 +336,8 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
          * and 2D projected gaussian kernels
          */
         // process gaussians in the current batch for this pixel
-        uint32_t batch_size = min(block_size, range_end - batch_start);
+        const int64_t remaining   = range_end - batch_start;
+        const uint32_t batch_size = static_cast<uint32_t>(remaining < block_size ? remaining : block_size);
         for(uint32_t t = 0; (t < batch_size) && !done; ++t)
         {
 
@@ -423,11 +425,11 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
             // compute median depth
             if(T > 0.5)
             {
-                median_depth = c_ptr[CDIM - 1];
-                median_idx   = batch_start + t;
+                median_depth               = c_ptr[CDIM - 1];
+                median_intersection_offset = static_cast<int32_t>(batch_offset + t);
             }
 
-            cur_idx = batch_start + t;
+            last_intersection_offset = static_cast<int32_t>(batch_offset + t);
 
             T = next_T;
         }
@@ -451,7 +453,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
             render_normals[pix_id * 3 + k] = normal_out[k];
         }
         // index in bin of last gaussian in this pixel
-        last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+        last_ids[pix_id] = last_intersection_offset;
 
         if(render_distort != nullptr)
         {
@@ -460,7 +462,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
 
         render_median[pix_id] = median_depth;
         // index in bin of gaussian that contributes to median depth
-        median_ids[pix_id]    = static_cast<int32_t>(median_idx);
+        median_ids[pix_id]    = median_intersection_offset;
     }
 }
 
@@ -496,7 +498,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     uint32_t I           = alphas.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width  = tile_offsets.size(-1);
-    uint32_t n_isects    = flatten_ids.size(0);
+    int64_t n_isects     = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
@@ -547,7 +549,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
                 tile_size,
                 tile_width,
                 tile_height,
-                tile_offsets.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int64_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 renders.data_ptr<float>(),
                 alphas.data_ptr<float>(),

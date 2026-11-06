@@ -39,10 +39,10 @@ namespace cg = cooperative_groups;
 
 template<uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
-    const uint32_t I,        // number of images
-    const uint32_t N,        // number of gaussians
-    const uint32_t n_isects, // number of ray-primitive intersections.
-    const bool packed,       // whether the input tensors are packed
+    const uint32_t I,       // number of images
+    const uint32_t N,       // number of gaussians
+    const int64_t n_isects, // number of ray-primitive intersections.
+    const bool packed,      // whether the input tensors are packed
     // fwd inputs
     const vec2 *__restrict__ means2d,            // Projected Gaussian means. [..., N, 2] if
                                                  // packed is False, [nnz, 2] if packed is True.
@@ -70,7 +70,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int64_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
 
     // fwd outputs
@@ -160,12 +160,13 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    int32_t range_start = tile_offsets[tile_id];
-    int32_t range_end
+    const int64_t range_start = tile_offsets[tile_id];
+    const int64_t range_end
         = (image_id == I - 1) && (tile_id == tile_width * tile_height - 1) ? n_isects : tile_offsets[tile_id + 1];
-    const uint32_t block_size  = block.size();
+    const uint32_t block_size       = block.size();
+    const int64_t num_intersections = range_end - range_start;
     // number of batches needed to process all gaussians in this tile
-    const uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
+    const int64_t num_batches       = (num_intersections + block_size - 1) / block_size;
 
     /**
      * ==============================
@@ -262,7 +263,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
      * =======================================================
      */
     // loop over all batches of primitives
-    for(uint32_t b = 0; b < num_batches; ++b)
+    for(int64_t b = 0; b < num_batches; ++b)
     {
         // resync all threads before writing next batch of shared mem
         block.sync();
@@ -270,20 +271,18 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
         // each thread fetch 1 gaussian from back to front
         // 0 index will be furthest back in batch
         // index of gaussian to load
-        // batch end is the index of the last gaussian in the batch
-        // These values can be negative so must be int32 instead of uint32
-
         // loop factors:
         // we start with loop end and interate backwards
-        const int32_t batch_end  = range_end - 1 - block_size * b;
-        const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
+        const int64_t batch_end_offset = num_intersections - 1 - block_size * b;
+        const int64_t remaining        = batch_end_offset + 1;
+        const uint32_t batch_size      = static_cast<uint32_t>(remaining < block_size ? remaining : block_size);
 
         // VERY IMPORTANT HERE!
         // we are looping from back to front
         // so we are processing the gaussians in the order of closest to
         // furthest if you use symbolic solver on splatting rendering equations
         // you will see
-        const int32_t idx = batch_end - tr;
+        const int64_t idx = range_start + batch_end_offset - tr;
 
         /*
          * Fetch Gaussian Primitives and STORE THEM IN REVERSE ORDER
@@ -319,11 +318,13 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
          * BACKWARD LOOPING THROUGH PRIMITIVES
          * ==================================================
          */
-        for(uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t)
+        const int64_t first_t64 = batch_end_offset > warp_bin_final ? batch_end_offset - warp_bin_final : 0;
+        const uint32_t first_t  = first_t64 < batch_size ? static_cast<uint32_t>(first_t64) : batch_size;
+        for(uint32_t t = first_t; t < batch_size; ++t)
         {
 
             bool valid = inside;
-            if(batch_end - t > bin_final)
+            if(batch_end_offset - t > bin_final)
             {
                 valid = 0;
             }
@@ -449,7 +450,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
             {
 
                 // gradient contribution from median depth
-                if(batch_end - t == median_idx)
+                if(batch_end_offset - t == median_idx)
                 {
                     // v_median is a special gradient input from forward pass
                     // not yet clear what this is for
@@ -745,7 +746,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     uint32_t I           = render_alphas.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width  = tile_offsets.size(-1);
-    uint32_t n_isects    = flatten_ids.size(0);
+    int64_t n_isects     = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
@@ -809,7 +810,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
                 tile_size,
                 tile_width,
                 tile_height,
-                tile_offsets.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int64_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 render_colors.const_data_ptr<float>(),
                 render_alphas.const_data_ptr<float>(),

@@ -553,8 +553,8 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
     mat3 *__restrict__ iscl_rot_batch,
     vec3 *__restrict__ scale_batch,
     vec3 *__restrict__ normal_batch,
-    const uint32_t batch_start,
-    const int32_t range_end,
+    const int64_t batch_start,
+    const int64_t range_end,
     const int32_t *__restrict__ flatten_ids,
     const vec3 *__restrict__ means,
     const vec4 *__restrict__ quats,
@@ -587,8 +587,8 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
     };
 
     // Each thread fetches 1 gaussian from front to back
-    const uint32_t idx = batch_start + tid;
-    if(thread_within_fetch_slot() && idx < (uint32_t)range_end)
+    const int64_t idx = batch_start + tid;
+    if(thread_within_fetch_slot() && idx < range_end)
     {
         // TODO: only support 1 camera for now so it is ok to abuse the index.
         int32_t isect_id       = flatten_ids[idx];
@@ -658,7 +658,8 @@ __device__ __forceinline__ void process_fetch_round_blend(
     const mat3 *__restrict__ iscl_rot_batch,
     const vec3 *__restrict__ scale_batch,
     const vec3 *__restrict__ normal_batch,
-    const uint32_t batch_start,
+    const int64_t batch_start,
+    const int32_t batch_offset,
     const uint32_t batch_size,
     const scalar_t *__restrict__ colors,
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
@@ -768,7 +769,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
                 normal_out[p]                   += normal * vis;
             }
 
-            cur_idx[p] = batch_start + t;
+            cur_idx[p] = batch_offset + t;
             n_accumulated[p]++;
             T[p] = next_T;
         }
@@ -810,8 +811,9 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     mat3 *__restrict__ iscl_rot_batch,
     vec3 *__restrict__ scale_batch,
     vec3 *__restrict__ normal_batch,
-    const uint32_t logical_batch_start,
-    const int32_t range_end,
+    const int64_t logical_batch_start,
+    const int32_t logical_batch_offset,
+    const int64_t range_end,
     const int32_t *__restrict__ flatten_ids,
     const vec3 *__restrict__ means,
     const vec4 *__restrict__ quats,
@@ -848,14 +850,15 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
 #pragma unroll
     for(uint32_t r = 0; r < FETCHES_PER_BATCH; ++r)
     {
-        const uint32_t batch_start = logical_batch_start + FETCH_SIZE_T * r;
+        const int64_t batch_start  = logical_batch_start + FETCH_SIZE_T * r;
+        const int32_t batch_offset = logical_batch_offset + FETCH_SIZE_T * r;
         // Skip rounds that fall past the tile's gaussian range (last
         // logical batch may be partial). Each thread votes "no fetch"
         // uniformly via the per-thread `idx >= range_end` guard inside
         // cooperative_load_fetch_round; here we only skip the
         // cooperative fetch entirely when the whole round is past
         // range_end.
-        if(batch_start >= (uint32_t)range_end)
+        if(batch_start >= range_end)
         {
             break;
         }
@@ -880,7 +883,8 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
 
         cta_sync<CTA_SIZE_T>();
 
-        const uint32_t batch_size = min(FETCH_SIZE_T, (uint32_t)range_end - batch_start);
+        const int64_t remaining   = range_end - batch_start;
+        const uint32_t batch_size = static_cast<uint32_t>(remaining < FETCH_SIZE_T ? remaining : FETCH_SIZE_T);
         process_fetch_round_blend<
             CDIM,
             PIXELS_PER_THREAD_T,
@@ -895,6 +899,7 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
           scale_batch,
           normal_batch,
           batch_start,
+          batch_offset,
           batch_size,
           colors,
           ray_o,

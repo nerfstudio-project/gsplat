@@ -426,7 +426,7 @@ def _fully_fused_projection_with_ut(
             height=height,
             camera_model=camera_model,
             principal_points=principal_points,
-            focal_lengths=focal_lengths,
+            focal_lengths=None if camera_model == "ftheta" else focal_lengths,
             radial_coeffs=radial_coeffs,
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
@@ -462,10 +462,20 @@ def _fully_fused_projection_with_ut(
         + t_cam[..., None, :]
     )  # [B, C, N, 3]
 
-    # Check if Gaussian center is within frustum.
-    # Use transformed center point (means_cam) for depth check
+    # Near/far cull depth is signed camera-space z unless Euclidean depth
+    # sorting is requested. In that mode LiDAR and FTheta use radial depth
+    # because their model classes accept rays with z <= 0; every other model
+    # retains signed z because its projection rejects those rays. This is a
+    # per-model rule: an FTheta calibration with max_angle <= pi/2 still takes
+    # the radial branch even though it images nothing behind the plane.
+    # Keeping forward-only models on signed z also prevents a behind-camera
+    # center from surviving through a few valid UT sigma points.
     center_z = means_cam[..., 2]  # [B, C, N]
-    in_frustum = (center_z >= near_plane) & (center_z <= far_plane)
+    use_radial_culling = not global_z_order and (
+        camera_model == "lidar" or camera_model == "ftheta"
+    )
+    cull_depth = means_cam.norm(dim=-1) if use_radial_culling else center_z
+    in_frustum = (cull_depth >= near_plane) & (cull_depth <= far_plane)
 
     # Cull degenerate Gaussians: zero-length quaternion (no defined orientation)
     # or near-zero scale on any axis (divergent precision matrix in rasterization).

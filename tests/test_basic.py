@@ -52,6 +52,8 @@ from gsplat._helper import (
 
 from gsplat.cuda._wrapper import (
     CameraModel,
+    FThetaCameraDistortionParameters,
+    FThetaPolynomialType,
     RollingShutterType,
     UnscentedTransformParameters,
     _make_lazy_cuda_cls,
@@ -706,7 +708,7 @@ def test_fully_fused_projection_packed(
     not torch.cuda.is_available(), reason="CUDA required for UT projection"
 )
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
-@pytest.mark.parametrize("camera_model", ["pinhole", "ortho"])
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "ftheta"])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize(
     "require_all_valid", [True, False], ids=["allvalid", "somevalid"]
@@ -751,6 +753,31 @@ def test_fully_fused_projection_ut(
     ut_params = UnscentedTransformParameters(
         require_all_sigma_points_valid=require_all_valid
     )
+    ftheta_coeffs = (
+        FThetaCameraDistortionParameters(
+            reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
+            pixeldist_to_angle_poly=(
+                0.0,
+                8.4335003e-03,
+                2.3174282e-06,
+                -5.0478608e-08,
+                6.1392608e-10,
+                -1.7447865e-12,
+            ),
+            angle_to_pixeldist_poly=(
+                0.0,
+                118.43232,
+                -2.562147,
+                6.317949,
+                -10.41861,
+                3.6694396,
+            ),
+            max_angle=math.radians(120.0),
+            linear_cde=(9.9968284e-01, 1.8735906e-05, 1.7659619e-05),
+        )
+        if camera_model == "ftheta"
+        else None
+    )
 
     # Setup rolling shutter (end viewmats) if not GLOBAL
     if rolling_shutter != RollingShutterType.GLOBAL:
@@ -779,6 +806,7 @@ def test_fully_fused_projection_ut(
         "width": width,
         "height": height,
         "camera_model": camera_model,
+        "ftheta_coeffs": ftheta_coeffs,
         "eps2d": 0.3,
         "near_plane": 0.01,
         "far_plane": 1e10,
@@ -884,9 +912,21 @@ def test_fully_fused_projection_ut(
         _bound = 5e-2 + 2e-3 * means2d_torch[sel].abs()
         _fail = _diff > _bound
         _fr = _fail.float().mean().item()
-        # fail_cap = 1.05 x worst observed (0.013145%) -> 0.014%.
-        assert _fr <= 1.4e-4, (
-            f"UT means2d (rolling): fail-rate {_fr:.4%} > cap 0.014% "
+        # ROLLING means2d has a boundary tail; cap the fail-rate per camera
+        # model. The fail-rate is a fraction over the selected elements, so
+        # subsampling the scene raises its variance and the cap must admit that.
+        # Keep the calibrated caps explicit per model so a new model cannot
+        # silently inherit another model's numerical-error budget.
+        # Preserve main's 0.014% budget for its existing models. RTX A6000
+        # FTheta worst observed fail-rate is 0.000928%; retain a 0.015% cap for
+        # cross-GPU/codegen margin.
+        _fail_cap = {
+            "pinhole": 1.4e-4,
+            "ortho": 1.4e-4,
+            "ftheta": 1.5e-4,
+        }[camera_model]
+        assert _fr <= _fail_cap, (
+            f"UT means2d (rolling): fail-rate {_fr:.4%} > cap {_fail_cap:.3%} "
             f"(atol=5e-2, rtol=2e-3, {int(_fail.sum().item())}/{_fail.numel()})"
         )
         # Outlier guard: even admitted outliers must satisfy a per-element
@@ -920,11 +960,14 @@ def test_fully_fused_projection_ut(
     # high rel-diff -- previously rtol=10.0 admitted any error.  Use a
     # bounded per-element check with a fail-rate cap.
     if rolling_shutter == RollingShutterType.GLOBAL:
+        _conics_rtol, _conics_atol = (
+            (2e-2, 3.2e-2) if camera_model == "ftheta" else (2e-3, 2e-3)
+        )
         torch.testing.assert_close(
             conics_cuda[sel],
             conics_torch[sel],
-            rtol=2e-3,
-            atol=2e-3,
+            rtol=_conics_rtol,
+            atol=_conics_atol,
         )
     else:
         _diff_c = (conics_cuda[sel] - conics_torch[sel]).abs()
@@ -934,8 +977,11 @@ def test_fully_fused_projection_ut(
         # fail_cap = 1.05 x envelope:
         #   RTX PRO 2000  worst fail-rate 0.0161%
         #   RTX PRO 6000  worst fail-rate 0.0191%
-        assert _fr_c <= 2.1e-4, (
-            f"UT conics (rolling): fail-rate {_fr_c:.4%} > cap 0.021% "
+        #   RTX A6000 FTheta  worst fail-rate 0.0598%
+        _conics_fail_cap = 6.3e-4 if camera_model == "ftheta" else 2.1e-4
+        assert _fr_c <= _conics_fail_cap, (
+            f"UT conics (rolling): fail-rate {_fr_c:.4%} > cap "
+            f"{_conics_fail_cap:.3%} "
             f"(atol=1e-2, rtol=1e-2, {int(_fail_c.sum().item())}/{_fail_c.numel()})"
         )
         # Outlier guard tightened to 1.05 x worst observed (1.855) -> 2.0.
@@ -962,8 +1008,11 @@ def test_fully_fused_projection_ut(
     #   boundary band: Gaussians whose footprint crosses an integer y ->
     #                 budgeted, symmetric flip-rate check.
     if rolling_shutter == RollingShutterType.GLOBAL:
+        # FTheta worst observed max_abs is 2.8178e-2 in CI; use a 1.05x
+        # cross-GPU envelope while retaining the tighter budget for other models.
+        _comps_atol = 3e-2 if camera_model == "ftheta" else 1e-2
         torch.testing.assert_close(
-            comps_cuda[sel], comps_torch[sel], rtol=0.01, atol=0.01
+            comps_cuda[sel], comps_torch[sel], rtol=0.01, atol=_comps_atol
         )
     else:
         # Boundary mask = "any of the 7 UT sigma points might project within
@@ -1002,13 +1051,17 @@ def test_fully_fused_projection_ut(
         # CUDA does not expose per-sigma-point projections, so a true cross
         # predicate cannot be written here; the boundary mask is a geometric
         # proxy.
+        # FTheta calibration on this fixture: interior max_abs=1.42e-2 and
+        # boundary flip ratio=0.1368%; use 1.05x envelopes.
+        _comps_interior_atol = 1.5e-2 if camera_model == "ftheta" else 7e-3
+        _comps_boundary_flip_cap = 1.5e-3 if camera_model == "ftheta" else 4.5e-4
         assert_close_with_boundary_band(
             comps_cuda[sel],
             comps_torch[sel],
             boundary_mask=boundary_mask,
-            interior_atol=7e-3,
+            interior_atol=_comps_interior_atol,
             interior_rtol=0.01,
-            boundary_max_flip_ratio=4.5e-4,  # 1.05 x observed worst (4.23e-4)
+            boundary_max_flip_ratio=_comps_boundary_flip_cap,
             boundary_symmetry_tol=1.0,  # disabled: too few flips meaningful
             flip_predicate=lambda a, e: (a - e).abs() > 7e-3,
             boundary_cross_predicate=None,
@@ -1025,6 +1078,142 @@ def test_fully_fused_projection_ut(
             f"exceed outlier bound atol=0.46; worst diff "
             f"{_diff_a.max().item():.4e}"
         )
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA required for UT projection"
+)
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_fully_fused_projection_ut_ftheta_straddles_camera_plane():
+    """Invalid FTheta sigma points still contribute their clamped projections."""
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+
+    focal = 80.0
+    width, height = 640, 480
+    means = torch.tensor([[0.2, 0.1, 0.04]], device=device)
+    scales = torch.tensor([[0.05, 0.08, 0.4]], device=device)
+    ftheta_coeffs = FThetaCameraDistortionParameters(
+        reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
+        pixeldist_to_angle_poly=(0.0, 1.0 / focal, 0.0, 0.0, 0.0, 0.0),
+        angle_to_pixeldist_poly=(0.0, focal, 0.0, 0.0, 0.0, 0.0),
+        max_angle=math.radians(85.0),
+        linear_cde=(1.0, 0.0, 0.0),
+    )
+    ut_params = UnscentedTransformParameters(
+        alpha=0.1,
+        beta=2.0,
+        kappa=0.0,
+        require_all_sigma_points_valid=False,
+    )
+
+    near_plane = 0.01
+    # The center passes the near-plane test, while the negative-z sigma point
+    # lies outside this <= pi/2 FTheta cone and is projected at max_angle.
+    # Sigma-point offset along z is sqrt(n + lambda) * scale, with n = 3 the UT
+    # state dimension and lambda = alpha**2 * (n + kappa) - n, which collapses
+    # to alpha * sqrt(n) at kappa = 0.
+    sigma_spread_z = ut_params.alpha * math.sqrt(3) * scales[0, 2]
+    assert means[0, 2] > near_plane
+    assert means[0, 2] - sigma_spread_z < 0.0
+
+    parameters = {
+        "means": means,
+        "quats": torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device),
+        "scales": scales,
+        "opacities": None,
+        "viewmats": torch.eye(4, device=device).reshape(1, 4, 4),
+        "Ks": torch.tensor(
+            [
+                [
+                    [1.0, 0.0, width / 2],
+                    [0.0, 1.0, height / 2],
+                    [0.0, 0.0, 1.0],
+                ]
+            ],
+            device=device,
+        ),
+        "width": width,
+        "height": height,
+        "camera_model": "ftheta",
+        "ftheta_coeffs": ftheta_coeffs,
+        "eps2d": 0.3,
+        "near_plane": near_plane,
+        "far_plane": 1e10,
+        "ut_params": ut_params,
+    }
+
+    radii_cuda, means2d_cuda, _, conics_cuda, _ = fully_fused_projection_with_ut(
+        **parameters
+    )
+    radii_torch, means2d_torch, _, conics_torch, _ = _fully_fused_projection_with_ut(
+        **parameters
+    )
+
+    assert (radii_cuda > 0).all()
+    assert (radii_torch > 0).all()
+
+    # Pin the footprint so changing both implementations in lockstep cannot
+    # restore the old (0, 0)-sentinel contribution unnoticed.
+    expected_means2d = torch.tensor([[[191.88852, 172.81131]]], device=device)
+    torch.testing.assert_close(means2d_cuda, expected_means2d, rtol=0, atol=5e-2)
+    torch.testing.assert_close(means2d_torch, expected_means2d, rtol=0, atol=5e-2)
+    torch.testing.assert_close(means2d_cuda, means2d_torch, rtol=2e-3, atol=5e-2)
+    torch.testing.assert_close(conics_cuda, conics_torch, rtol=2e-3, atol=2e-3)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA required for UT projection"
+)
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_fully_fused_projection_ut_ftheta_culling_branch():
+    """FTheta switches from signed-z to radial culling with distance sorting."""
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+
+    focal = 80.0
+    width, height = 640, 480
+    parameters = {
+        "means": torch.tensor([[0.2, 0.1, -0.04]], device=device),
+        "quats": torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device),
+        "scales": torch.full((1, 3), 0.01, device=device),
+        "opacities": None,
+        "viewmats": torch.eye(4, device=device).reshape(1, 4, 4),
+        "Ks": torch.tensor(
+            [
+                [
+                    [1.0, 0.0, width / 2],
+                    [0.0, 1.0, height / 2],
+                    [0.0, 0.0, 1.0],
+                ]
+            ],
+            device=device,
+        ),
+        "width": width,
+        "height": height,
+        "camera_model": "ftheta",
+        "ftheta_coeffs": FThetaCameraDistortionParameters(
+            reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
+            pixeldist_to_angle_poly=(0.0, 1.0 / focal, 0.0, 0.0, 0.0, 0.0),
+            angle_to_pixeldist_poly=(0.0, focal, 0.0, 0.0, 0.0, 0.0),
+            max_angle=math.radians(120.0),
+            linear_cde=(1.0, 0.0, 0.0),
+        ),
+        "eps2d": 0.3,
+        "near_plane": 0.01,
+        "far_plane": 1e10,
+        "ut_params": UnscentedTransformParameters(),
+    }
+
+    for projection in (
+        fully_fused_projection_with_ut,
+        _fully_fused_projection_with_ut,
+    ):
+        radii_global_z = projection(**parameters, global_z_order=True)[0]
+        radii_radial = projection(**parameters, global_z_order=False)[0]
+
+        assert (radii_global_z == 0).all()
+        assert (radii_radial > 0).all()
 
 
 @pytest.mark.skipif(
@@ -1114,6 +1303,7 @@ def test_isect(test_data, dtype: torch.dtype, batch_dims: Tuple[int, ...]):
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+    assert isect_offsets.dtype == torch.int64
 
     _tiles_per_gauss, _isect_ids, _gauss_ids = _isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
@@ -3703,10 +3893,10 @@ def test_rasterize_to_pixels_eval3d(
     assert not (count_match & vis_mismatch).any()
     assert not (count_mismatch & count_match).any()
 
-    # On count-matched pixels, the last contributing gaussian's flatten_idx
-    # must match exactly. An off-by-one, such as over-counting the saturating
-    # gaussian past TRANSMITTANCE_THRESHOLD, can shift last_ids by 1 while
-    # sample_counts still coincidentally match.
+    # On count-matched pixels, the last contributing gaussian's tile-local
+    # flatten_ids offset must match exactly. An off-by-one, such as
+    # over-counting the saturating gaussian past TRANSMITTANCE_THRESHOLD, can
+    # shift last_ids by 1 while sample_counts still coincidentally match.
     last_ids_match = render_last_ids[count_match] == _render_last_ids[count_match]
     assert last_ids_match.all(), (
         f"last_ids diverge on {(~last_ids_match).sum().item()} of "
@@ -4192,7 +4382,7 @@ def test_eval3d_masked_tile_writes_safe_defaults(tile_size, renderer_config):
         ],
         device=device,
     )
-    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int64, device=device)
     flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
 
     public_render_colors, public_render_alphas = gsplat.rasterize_to_pixels_eval3d(
@@ -5527,10 +5717,7 @@ def test_rasterization_cpp_classic_sh_backward_matches_python_reference(packed: 
 
     torch.manual_seed(18)
     scene = _make_cpp_classic_rasterization_scene(use_color_sh=True)
-    # The Python reference differentiates viewdirs through inverse(viewmats),
-    # while C++ uses the rigid-camera formula -R^T t. Compare means to exercise
-    # the SH direction-gradient path without using a non-equivalent viewmats VJP.
-    grad_names = ("means", "colors")
+    grad_names = ("means", "colors", "viewmats")
     _set_rasterization_scene_requires_grad(scene, grad_names)
 
     public_colors, public_alphas, _ = gsplat.rasterization(
@@ -5803,6 +5990,43 @@ def test_rasterization_cpp_ut_camera_absgrad_forward_neutral(
         torch.testing.assert_close(
             cpp_meta["normals"], ref_meta["normals"], rtol=1e-4, atol=5e-5
         )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterization_cpp_ut_rolling_shutter_sh_backward():
+    torch.manual_seed(38)
+    scene = _make_cpp_classic_rasterization_scene(use_color_sh=True)
+
+    viewmats = scene["viewmats"].detach().requires_grad_(True)
+    viewmats_rs = scene["viewmats"].detach().clone()
+    viewmats_rs[..., 0, 3] += 0.03
+    viewmats_rs[..., 1, 3] -= 0.02
+    viewmats_rs.requires_grad_(True)
+    scene["viewmats"] = viewmats
+
+    render_colors, render_alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        rasterize_mode="classic",
+        packed=False,
+        with_ut=True,
+        rolling_shutter=RollingShutterType.ROLLING_TOP_TO_BOTTOM,
+        viewmats_rs=viewmats_rs,
+    )
+
+    assert torch.isfinite(render_colors).all()
+    assert torch.isfinite(render_alphas).all()
+
+    v_colors = torch.randn_like(render_colors)
+    (render_colors * v_colors).sum().backward()
+    for name, tensor in (("viewmats", viewmats), ("viewmats_rs", viewmats_rs)):
+        assert tensor.grad is not None, f"{name} gradient was not produced"
+        assert torch.isfinite(tensor.grad).all(), f"{name} gradient contains NaN/Inf"
+        assert tensor.grad.abs().sum() > 0, f"{name} gradient is zero"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -6172,26 +6396,57 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
     torch.manual_seed(42)
 
     N = 1000
+    C = 3
     K = (4 + 1) ** 2
     coeffs_src = torch.randn(N, K, D, device=device, requires_grad=True)
+    means = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(*batch_dims, C, 4, 4).clone()
+    angles = torch.randn(*batch_dims, C, device=device)
+    viewmats[..., 0, 0] = angles.cos()
+    viewmats[..., 0, 1] = -angles.sin()
+    viewmats[..., 1, 0] = angles.sin()
+    viewmats[..., 1, 1] = angles.cos()
+    viewmats[..., :3, 3] = torch.randn(*batch_dims, C, 3, device=device)
+    viewmats.requires_grad_(True)
 
     if packed:
         # Mirror the packed call site (rendering.py): a [N, K, D] source of
         # per-Gaussian coeffs is gathered into [nnz, K, D] via gaussian_ids
-        # (one row per visible (Gaussian, camera) pair), and dirs is [nnz, 3].
+        # (one row per visible (Gaussian, camera) pair).
         # nnz > N with random ids exercises the duplicate-gaussian regime that
         # the unpacked broadcast path never hits.
         nnz = 3000
         gaussian_ids = torch.randint(0, N, (nnz,), device=device)
+        # duplicates required: gather-VJP accumulation is the point of packed mode
+        assert gaussian_ids.unique().numel() < nnz
+        batch_ids = torch.zeros(nnz, dtype=torch.long, device=device)
+        camera_ids = torch.randint(0, C, (nnz,), device=device)
         coeffs = coeffs_src[gaussian_ids]  # [nnz, K, D]
-        dirs = torch.randn(nnz, 3, device=device, requires_grad=True)
+        rotations = viewmats[camera_ids, :3, :3]
+        translations = viewmats[camera_ids, :3, 3]
+        dirs = means[gaussian_ids] + torch.bmm(
+            rotations.transpose(-1, -2), translations.unsqueeze(-1)
+        ).squeeze(-1)
         expected_colors_shape = (nnz, D)
     else:
         coeffs = coeffs_src
-        dirs = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
-        expected_colors_shape = (*batch_dims, N, D)
+        batch_ids = camera_ids = gaussian_ids = None
+        camera_offsets = torch.matmul(
+            viewmats[..., :3, :3].transpose(-1, -2),
+            viewmats[..., :3, 3].unsqueeze(-1),
+        ).squeeze(-1)
+        dirs = means[..., None, :, :] + camera_offsets[..., :, None, :]
+        expected_colors_shape = (*batch_dims, C, N, D)
 
-    colors = spherical_harmonics(sh_degree, dirs, coeffs)
+    colors = spherical_harmonics(
+        sh_degree,
+        means,
+        viewmats,
+        coeffs,
+        batch_ids=batch_ids,
+        camera_ids=camera_ids,
+        gaussian_ids=gaussian_ids,
+    )
     _colors = _spherical_harmonics(sh_degree, dirs, coeffs)
     assert colors.shape == expected_colors_shape, colors.shape
     torch.testing.assert_close(colors, _colors, rtol=1e-4, atol=1e-4)
@@ -6200,15 +6455,15 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
 
     # Take grads w.r.t. coeffs_src (the [N, K, D] leaf) so packed mode also
     # exercises the gather VJP that accumulates duplicate-id rows back to source.
-    v_coeffs_src, v_dirs = torch.autograd.grad(
+    v_coeffs_src, v_means, v_viewmats = torch.autograd.grad(
         (colors * v_colors).sum(),
-        (coeffs_src, dirs),
+        (coeffs_src, means, viewmats),
         retain_graph=True,
         allow_unused=True,
     )
-    _v_coeffs_src, _v_dirs = torch.autograd.grad(
+    _v_coeffs_src, _v_means, _v_viewmats = torch.autograd.grad(
         (_colors * v_colors).sum(),
-        (coeffs_src, dirs),
+        (coeffs_src, means, viewmats),
         retain_graph=True,
         allow_unused=True,
     )
@@ -6225,18 +6480,321 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
         msg="v_coeffs_src",
     )
     if sh_degree > 0:
-        assert v_dirs.shape == dirs.shape, v_dirs.shape
+        assert v_means.shape == means.shape, v_means.shape
         assert_grad_reference_close(
-            v_dirs,
-            _v_dirs,
+            v_means,
+            _v_means,
             rtol=1e-4,
             atol=1e-4,
             max_rel_l2=1e-3,
             max_rel_l1=1e-3,
             min_cosine=0.999999,
             max_signed_bias=1e-3,
-            msg="v_dirs",
+            msg="v_means",
         )
+        assert_grad_reference_close(
+            v_viewmats,
+            _v_viewmats,
+            rtol=1e-4,
+            # atomicAdd accumulation over N gaussians is non-deterministic, so
+            # small-magnitude entries can drift slightly past a 1e-4 floor; the
+            # aggregate guards below keep the overall gradient tight.
+            atol=2e-3,
+            max_rel_l2=1e-3,
+            max_rel_l1=1e-3,
+            min_cosine=0.999999,
+            max_signed_bias=1e-3,
+            msg="v_viewmats",
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("batch_dims", [(), (2,)])
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("D", [1, 3])
+def test_sh_split_invariant(
+    sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int
+):
+    """Split sh0/shN evaluation matches evaluating their concatenation."""
+    from gsplat.cuda._wrapper import (
+        spherical_harmonics,
+        spherical_harmonics_l0,
+        spherical_harmonics_l1_plus,
+    )
+
+    if packed and batch_dims != ():
+        pytest.skip("packed inputs use explicit batch IDs; batch_dims is irrelevant")
+
+    torch.manual_seed(42)
+
+    N = 127
+    C = 2
+    K = (4 + 1) ** 2
+    sh0_src = torch.randn(N, 1, D, device=device, requires_grad=True)
+    shN_src = torch.randn(N, K - 1, D, device=device, requires_grad=True)
+    means = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(*batch_dims, C, 4, 4).clone()
+    viewmats[..., :3, 3] = torch.randn(*batch_dims, C, 3, device=device)
+    viewmats.requires_grad_(True)
+
+    if packed:
+        nnz = 311
+        gaussian_ids = torch.randint(0, N, (nnz,), device=device)
+        # duplicates required so the grad scatter-add accumulation is genuinely
+        # exercised (guaranteed by nnz=311 > N=127; locks the invariant against
+        # future edits)
+        assert gaussian_ids.unique().numel() < nnz
+        batch_ids = torch.zeros(nnz, dtype=torch.long, device=device)
+        camera_ids = torch.randint(0, C, (nnz,), device=device)
+        sh0 = sh0_src[gaussian_ids]
+        shN = shN_src[gaussian_ids]
+    else:
+        batch_ids = camera_ids = gaussian_ids = None
+        sh0 = sh0_src
+        shN = shN_src
+
+    sh_args = dict(
+        batch_ids=batch_ids,
+        camera_ids=camera_ids,
+        gaussian_ids=gaussian_ids,
+    )
+    colors = spherical_harmonics(
+        sh_degree, means, viewmats, torch.cat([sh0, shN], dim=1), **sh_args
+    )
+    l0 = spherical_harmonics_l0(sh0)
+    l1_plus = spherical_harmonics_l1_plus(sh_degree, means, viewmats, shN, **sh_args)
+    if sh_degree == 0:
+        # deg-0 zero contract made explicit: l1_plus emits exactly zero
+        assert (l1_plus == 0).all()
+    else:
+        # non-vacuity: deg>0 comparisons must not be zeros-vs-zeros
+        assert l1_plus.abs().max() > 0
+    split_colors = l0 + l1_plus
+
+    assert l0.shape == (sh0.shape[0], D)
+    assert l1_plus.shape == colors.shape
+    torch.testing.assert_close(colors, split_colors, rtol=1e-4, atol=1e-4)
+
+    v_colors = torch.randn_like(colors)
+    full_grads = torch.autograd.grad(
+        (colors * v_colors).sum(),
+        (sh0_src, shN_src, means, viewmats),
+        retain_graph=True,
+    )
+    split_grads = torch.autograd.grad(
+        (split_colors * v_colors).sum(),
+        (sh0_src, shN_src, means, viewmats),
+        retain_graph=True,
+    )
+
+    # The full coefficient gradient is reconstructed by concatenating the two
+    # split coefficient gradients in the same layout used by simple_trainer.py.
+    full_v_coeffs = torch.cat(full_grads[:2], dim=1)
+    split_v_coeffs = torch.cat(split_grads[:2], dim=1)
+    assert_grad_reference_close(
+        split_v_coeffs,
+        full_v_coeffs,
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="split v_coeffs",
+    )
+    assert_grad_reference_close(
+        split_grads[2],
+        full_grads[2],
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="split v_means",
+    )
+    assert_grad_reference_close(
+        split_grads[3],
+        full_grads[3],
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="split v_viewmats",
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_split_rolling_shutter_backward():
+    """Split SH matches full SH with gradients to both shutter endpoints."""
+    from gsplat.cuda._wrapper import (
+        spherical_harmonics,
+        spherical_harmonics_l0,
+        spherical_harmonics_l1_plus,
+    )
+
+    torch.manual_seed(43)
+
+    degree = 2
+    N, C, D = 127, 2, 3
+    K = (degree + 1) ** 2
+    sh0 = torch.randn(N, 1, D, device=device, requires_grad=True)
+    shN = torch.randn(N, K - 1, D, device=device, requires_grad=True)
+    means = torch.randn(N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(C, 4, 4).clone()
+    viewmats[..., :3, 3] = torch.randn(C, 3, device=device)
+    viewmats.requires_grad_(True)
+    viewmats_rs = viewmats.detach().clone()
+    viewmats_rs[..., :3, 3] += torch.randn(C, 3, device=device) * 0.1
+    viewmats_rs.requires_grad_(True)
+
+    colors = spherical_harmonics(
+        degree,
+        means,
+        viewmats,
+        torch.cat([sh0, shN], dim=1),
+        viewmats_rs=viewmats_rs,
+    )
+    split_colors = spherical_harmonics_l0(sh0) + spherical_harmonics_l1_plus(
+        degree, means, viewmats, shN, viewmats_rs=viewmats_rs
+    )
+    torch.testing.assert_close(colors, split_colors, rtol=1e-4, atol=1e-4)
+
+    inputs = (sh0, shN, means, viewmats, viewmats_rs)
+    v_colors = torch.randn_like(colors)
+    full_grads = torch.autograd.grad(
+        (colors * v_colors).sum(), inputs, retain_graph=True
+    )
+    split_grads = torch.autograd.grad(
+        (split_colors * v_colors).sum(), inputs, retain_graph=True
+    )
+    for name, split_grad, full_grad in zip(
+        ("sh0", "shN", "means", "viewmats", "viewmats_rs"),
+        split_grads,
+        full_grads,
+    ):
+        assert_grad_reference_close(
+            split_grad,
+            full_grad,
+            rtol=1e-4,
+            atol=1e-4,
+            max_rel_l2=1e-3,
+            max_rel_l1=1e-3,
+            min_cosine=0.999999,
+            max_signed_bias=1e-3,
+            msg=f"split v_{name}",
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_split_invariant_trainer_layout_fp16():
+    """Trainer-layout FP16 split evaluation matches the K=16 RGB path."""
+    from gsplat.cuda._wrapper import (
+        spherical_harmonics,
+        spherical_harmonics_l0,
+        spherical_harmonics_l1_plus,
+    )
+
+    torch.manual_seed(42)
+
+    N, D, sh_degree = 257, 3, 3
+    sh0 = torch.randn(N, 1, D, device=device, dtype=torch.float16, requires_grad=True)
+    # Fifteen coefficients is the exact minimum for degree 3 after omitting sh0.
+    shN = torch.randn(N, 15, D, device=device, dtype=torch.float16, requires_grad=True)
+    means = torch.randn(N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(2, 4, 4).clone()
+    viewmats[:, :3, 3] = torch.randn(2, 3, device=device)
+    viewmats.requires_grad_(True)
+
+    coeffs = torch.cat([sh0, shN], dim=1)
+    assert coeffs.shape == (N, 16, D)
+    assert coeffs.data_ptr() % 16 == 0
+
+    colors = spherical_harmonics(sh_degree, means, viewmats, coeffs)
+    l0 = spherical_harmonics_l0(sh0)
+    l1_plus = spherical_harmonics_l1_plus(sh_degree, means, viewmats, shN)
+    split_colors = l0 + l1_plus
+
+    torch.testing.assert_close(split_colors, colors, rtol=1e-3, atol=2e-3)
+
+    v_colors = torch.randn_like(colors)
+    full_grads = torch.autograd.grad(
+        (colors * v_colors).sum(), (sh0, shN, means, viewmats), retain_graph=True
+    )
+    split_grads = torch.autograd.grad(
+        (split_colors * v_colors).sum(),
+        (sh0, shN, means, viewmats),
+        retain_graph=True,
+    )
+
+    full_v_coeffs = torch.cat(full_grads[:2], dim=1).float()
+    split_v_coeffs = torch.cat(split_grads[:2], dim=1).float()
+    assert_grad_reference_close(
+        split_v_coeffs,
+        full_v_coeffs,
+        rtol=2e-3,
+        atol=5e-4,
+        max_rel_l2=5e-3,
+        max_rel_l1=5e-3,
+        min_cosine=0.99999,
+        max_signed_bias=5e-3,
+        msg="trainer FP16 split v_coeffs",
+    )
+    assert_grad_reference_close(
+        split_grads[2],
+        full_grads[2],
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="trainer FP16 split v_means",
+    )
+    assert_grad_reference_close(
+        split_grads[3],
+        full_grads[3],
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="trainer FP16 split v_viewmats",
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_split_l0_accepts_empty_shn():
+    from gsplat.cuda._wrapper import (
+        spherical_harmonics,
+        spherical_harmonics_l0,
+        spherical_harmonics_l1_plus,
+    )
+
+    torch.manual_seed(42)
+    N, D = 32, 3
+    sh0 = torch.randn(N, 1, D, device=device, requires_grad=True)
+    shN = torch.empty(N, 0, D, device=device, requires_grad=True)
+    means = torch.randn(N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(2, 4, 4).clone().requires_grad_(True)
+
+    colors = spherical_harmonics(0, means, viewmats, sh0)
+    l0 = spherical_harmonics_l0(sh0)
+    l1_plus = spherical_harmonics_l1_plus(0, means, viewmats, shN)
+
+    torch.testing.assert_close(l1_plus, torch.zeros_like(l1_plus))
+    torch.testing.assert_close(colors, l0 + l1_plus)
+
+    v_shN, v_means, v_viewmats = torch.autograd.grad(
+        l1_plus.sum(), (shN, means, viewmats), allow_unused=False
+    )
+    torch.testing.assert_close(v_shN, torch.zeros_like(shN))
+    torch.testing.assert_close(v_means, torch.zeros_like(means))
+    torch.testing.assert_close(v_viewmats, torch.zeros_like(viewmats))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -6247,18 +6805,22 @@ def test_sh_backward_accepts_strided_output_grad():
     torch.manual_seed(42)
 
     N, K, D = 128, (3 + 1) ** 2, 3
-    dirs = torch.randn(2, N, 3, device=device, requires_grad=True)
+    means = torch.randn(N, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device).expand(2, 4, 4).clone().requires_grad_(True)
     coeffs = torch.randn(N, K, D, device=device, requires_grad=True)
 
-    colors = spherical_harmonics(3, dirs, coeffs)
+    colors = spherical_harmonics(3, means, viewmats, coeffs)
     grad_storage = torch.randn(2, N, D * 2, device=device)
     v_colors = grad_storage[..., :D]
     assert not v_colors.is_contiguous()
 
-    v_coeffs, v_dirs = torch.autograd.grad(colors, (coeffs, dirs), v_colors)
+    v_coeffs, v_means, v_viewmats = torch.autograd.grad(
+        colors, (coeffs, means, viewmats), v_colors
+    )
 
     assert torch.isfinite(v_coeffs).all()
-    assert torch.isfinite(v_dirs).all()
+    assert torch.isfinite(v_means).all()
+    assert torch.isfinite(v_viewmats).all()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -6268,10 +6830,11 @@ def test_sh_zero_channels():
 
     N = 8
     K = (4 + 1) ** 2
-    dirs = torch.randn(N, 3, device=device)
+    means = torch.randn(N, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
     coeffs = torch.randn(N, K, 0, device=device)
     with pytest.raises(RuntimeError):
-        spherical_harmonics(0, dirs, coeffs)
+        spherical_harmonics(0, means, viewmats, coeffs)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -6295,21 +6858,40 @@ def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
 
     N = 1000
     coeffs_fp32 = torch.randn(N, K, 3, device=device)
-    dirs = torch.randn(N, 3, device=device)
+    means_src = torch.randn(N, 3, device=device)
+    viewmats_src = torch.eye(4, device=device).unsqueeze(0)
+    viewmats_src[:, :3, 3] = torch.randn(1, 3, device=device)
 
     # fp16 coefficients through CUDA kernel
     coeffs_h = coeffs_fp32.half().requires_grad_(True)
-    dirs_h = dirs.clone().requires_grad_(True)
-    colors_h = spherical_harmonics(sh_degree, dirs_h, coeffs_h)
+    means_h = means_src.clone().requires_grad_(True)
+    viewmats_h = viewmats_src.clone().requires_grad_(True)
+    colors_h = spherical_harmonics(sh_degree, means_h, viewmats_h, coeffs_h)
 
     # Reference 1: roundtripped fp16->fp32 through pure-PyTorch (isolates kernel correctness)
     coeffs_ref = coeffs_fp32.half().float().requires_grad_(True)
-    dirs_ref = dirs.clone().requires_grad_(True)
+    means_ref = means_src.clone().requires_grad_(True)
+    viewmats_ref = viewmats_src.clone().requires_grad_(True)
+    dirs_ref = (
+        means_ref[None]
+        + torch.matmul(
+            viewmats_ref[:, :3, :3].transpose(-1, -2),
+            viewmats_ref[:, :3, 3].unsqueeze(-1),
+        ).squeeze(-1)[:, None, :]
+    )
     colors_ref = _spherical_harmonics(sh_degree, dirs_ref, coeffs_ref)
 
     # Reference 2: true fp32 through pure-PyTorch (measures total fp16 precision loss)
     coeffs_fp32_ref = coeffs_fp32.clone().requires_grad_(True)
-    dirs_fp32_ref = dirs.clone().requires_grad_(True)
+    means_fp32_ref = means_src.clone().requires_grad_(True)
+    viewmats_fp32_ref = viewmats_src.clone().requires_grad_(True)
+    dirs_fp32_ref = (
+        means_fp32_ref[None]
+        + torch.matmul(
+            viewmats_fp32_ref[:, :3, :3].transpose(-1, -2),
+            viewmats_fp32_ref[:, :3, 3].unsqueeze(-1),
+        ).squeeze(-1)[:, None, :]
+    )
     colors_fp32_ref = _spherical_harmonics(sh_degree, dirs_fp32_ref, coeffs_fp32_ref)
 
     # Forward: kernel correctness (tight, same quantized inputs)
@@ -6320,21 +6902,21 @@ def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
     # Backward check
     v_colors = torch.randn_like(colors_h)
 
-    v_coeffs_h, v_dirs_h = torch.autograd.grad(
+    v_coeffs_h, v_means_h, v_viewmats_h = torch.autograd.grad(
         (colors_h * v_colors).sum(),
-        (coeffs_h, dirs_h),
+        (coeffs_h, means_h, viewmats_h),
         retain_graph=True,
         allow_unused=True,
     )
-    v_coeffs_ref, v_dirs_ref = torch.autograd.grad(
+    v_coeffs_ref, v_means_ref, v_viewmats_ref = torch.autograd.grad(
         (colors_ref * v_colors).sum(),
-        (coeffs_ref, dirs_ref),
+        (coeffs_ref, means_ref, viewmats_ref),
         retain_graph=True,
         allow_unused=True,
     )
-    v_coeffs_fp32_ref, v_dirs_fp32_ref = torch.autograd.grad(
+    v_coeffs_fp32_ref, v_means_fp32_ref, v_viewmats_fp32_ref = torch.autograd.grad(
         (colors_fp32_ref * v_colors).sum(),
-        (coeffs_fp32_ref, dirs_fp32_ref),
+        (coeffs_fp32_ref, means_fp32_ref, viewmats_fp32_ref),
         retain_graph=True,
         allow_unused=True,
     )
@@ -6365,28 +6947,39 @@ def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
     )
     if sh_degree > 0:
         assert_grad_reference_close(
-            v_dirs_h,
-            v_dirs_ref,
+            v_means_h,
+            v_means_ref,
             rtol=1e-4,
             atol=1e-4,
             max_rel_l2=1e-3,
             max_rel_l1=1e-3,
             min_cosine=0.999999,
             max_signed_bias=1e-3,
-            msg="v_dirs_h vs fp16-ref",
+            msg="v_means_h vs fp16-ref",
         )
-        # v_dirs total precision loss vs true fp32, higher-order bands amplify
-        # coefficient quantization error into direction gradients
+        # Geometry-gradient precision loss versus true fp32; higher-order bands
+        # amplify coefficient quantization error.
         assert_grad_reference_close(
-            v_dirs_h,
-            v_dirs_fp32_ref,
+            v_means_h,
+            v_means_fp32_ref,
             rtol=5e-2,
             atol=1e-2,
             max_rel_l2=1e-1,
             max_rel_l1=1e-1,
             min_cosine=0.99,
             max_signed_bias=1e-1,
-            msg="v_dirs_h vs fp32-ref",
+            msg="v_means_h vs fp32-ref",
+        )
+        assert_grad_reference_close(
+            v_viewmats_h,
+            v_viewmats_ref,
+            rtol=1e-4,
+            atol=1e-4,
+            max_rel_l2=1e-3,
+            max_rel_l1=1e-3,
+            min_cosine=0.999999,
+            max_signed_bias=1e-3,
+            msg="v_viewmats_h vs fp16-ref",
         )
 
 
@@ -6420,7 +7013,8 @@ def test_sh_k16_misaligned_coeffs(dtype, sh_degree, storage_offset):
     N, K = 1000, 16
 
     coeffs_aligned = torch.randn(N, K, 3, device=device, dtype=dtype)
-    dirs = torch.randn(N, 3, device=device)
+    means = torch.randn(N, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
 
     storage = torch.empty(N * K * 3 + storage_offset, device=device, dtype=dtype)
     storage[:storage_offset] = 0
@@ -6429,10 +7023,70 @@ def test_sh_k16_misaligned_coeffs(dtype, sh_degree, storage_offset):
     assert coeffs_misaligned.is_contiguous()
     assert coeffs_misaligned.storage_offset() == storage_offset
 
-    colors_aligned = spherical_harmonics(sh_degree, dirs, coeffs_aligned)
-    colors_misaligned = spherical_harmonics(sh_degree, dirs, coeffs_misaligned)
+    colors_aligned = spherical_harmonics(sh_degree, means, viewmats, coeffs_aligned)
+    colors_misaligned = spherical_harmonics(
+        sh_degree, means, viewmats, coeffs_misaligned
+    )
 
     torch.testing.assert_close(colors_misaligned, colors_aligned)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sh_degree", [-1, 5])
+def test_sh_rejects_unsupported_degree(sh_degree: int):
+    from gsplat.cuda._wrapper import spherical_harmonics, spherical_harmonics_l1_plus
+
+    N, K, D = 4, 36, 3
+    means = torch.randn(N, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    coeffs = torch.randn(N, K, D, device=device)
+
+    with pytest.raises(RuntimeError, match="degrees_to_use must be between 0 and 4"):
+        spherical_harmonics(sh_degree, means, viewmats, coeffs)
+    with pytest.raises(RuntimeError, match="degrees_to_use must be between 0 and 4"):
+        spherical_harmonics_l1_plus(sh_degree, means, viewmats, coeffs[:, 1:])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sh_degree", [0, 4])
+@pytest.mark.parametrize("K", [26, 30])
+def test_sh_backward_zeros_padded_k_gt_max_supported(sh_degree: int, K: int):
+    """Backward must zero-fill padded coeff slots when K > MAX_K (25)."""
+    from gsplat.cuda._wrapper import spherical_harmonics, spherical_harmonics_l1_plus
+
+    torch.manual_seed(42)
+    N, D = 16, 3
+    coeffs = torch.randn(
+        N, K, D, device=device, dtype=torch.float16, requires_grad=True
+    )
+    means = torch.randn(N, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+
+    colors = spherical_harmonics(sh_degree, means, viewmats, coeffs)
+    colors.sum().backward()
+
+    active = (sh_degree + 1) ** 2
+    if active < min(K, 25):
+        torch.testing.assert_close(
+            coeffs.grad[:, active : min(K, 25), :],
+            torch.zeros_like(coeffs.grad[:, active : min(K, 25), :]),
+        )
+    if K > 25:
+        torch.testing.assert_close(
+            coeffs.grad[:, 25:, :],
+            torch.zeros_like(coeffs.grad[:, 25:, :]),
+        )
+
+    sh0 = coeffs[:, :1, :].detach().clone().requires_grad_(True)
+    shN = coeffs[:, 1:K, :].detach().clone().requires_grad_(True)
+    colors_l1 = spherical_harmonics_l1_plus(sh_degree, means, viewmats, shN)
+    colors_l1.sum().backward()
+    if sh_degree == 0:
+        torch.testing.assert_close(shN.grad, torch.zeros_like(shN.grad))
+    if K - 1 > 24:
+        torch.testing.assert_close(
+            shN.grad[:, 24:, :], torch.zeros_like(shN.grad[:, 24:, :])
+        )
 
 
 # ============================================================================
@@ -7154,7 +7808,7 @@ def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized(packed: bool, 
         else backgrounds_batched.clone()
     ).requires_grad_()
     masks = torch.zeros((I, 1, 1), dtype=torch.bool, device=device)  # tiles masked off
-    isect_offsets = torch.zeros((I, 1, 1), dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros((I, 1, 1), dtype=torch.int64, device=device)
     flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
 
     (
@@ -7508,7 +8162,7 @@ def test_rasterize_to_indices_in_range_empty():
     conics = torch.zeros(C, 0, 3, device=device)
     opacities = torch.zeros(C, 0, device=device)
     transmittances = torch.ones(C, H, W, device=device)
-    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int64, device=device)
     flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
 
     gauss_ids, pixel_ids, image_ids = rasterize_to_indices_in_range(
@@ -7552,7 +8206,7 @@ def test_rasterize_to_pixels_eval3d_empty():
         [[[float(W), 0.0, W / 2.0], [0.0, float(H), H / 2.0], [0.0, 0.0, 1.0]]],
         device=device,
     )
-    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int32, device=device)
+    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int64, device=device)
     flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
 
     # Must not crash (pre-fix: host-side division by zero on the empty input),

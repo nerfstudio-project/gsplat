@@ -30,13 +30,13 @@ constexpr int64_t rasterize_contributing_common_shmem_size()
 
 template<uint32_t TILE_SIZE, uint32_t CTA_SIZE, typename Accumulator>
 __global__ void __launch_bounds__(CTA_SIZE) rasterize_contributing_common_kernel(
-    const uint32_t n_isects,
+    const int64_t n_isects,
     const vec2 *__restrict__ means2d,    // [I, N, 2] or [nnz, 2]
     const vec3 *__restrict__ conics,     // [I, N, 3] or [nnz, 3]
     const float *__restrict__ opacities, // [I, N] or [nnz]
     const uint32_t image_width,
     const uint32_t image_height,
-    const int32_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
+    const int64_t *__restrict__ tile_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     Accumulator accum
 )
@@ -97,12 +97,12 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_contributing_common_kernel
         }
     }
 
-    const int32_t range_start  = tile_offsets[tile_id];
-    const int32_t range_end    = (image_id == static_cast<int32_t>(gridDim.x) - 1)
-                                      && (tile_id == static_cast<int32_t>(grid_width * grid_height) - 1)
-                                   ? n_isects
-                                   : tile_offsets[tile_id + 1];
-    const uint32_t num_batches = (range_end - range_start + BATCH_SIZE - 1) / BATCH_SIZE;
+    const int64_t range_start = tile_offsets[tile_id];
+    const int64_t range_end   = (image_id == static_cast<int32_t>(gridDim.x) - 1)
+                                     && (tile_id == static_cast<int32_t>(grid_width * grid_height) - 1)
+                                  ? n_isects
+                                  : tile_offsets[tile_id + 1];
+    const int64_t num_batches = (range_end - range_start + BATCH_SIZE - 1) / BATCH_SIZE;
 
     extern __shared__ int s[];
     int32_t *id_batch      = reinterpret_cast<int32_t *>(s);                          // [BATCH_SIZE]
@@ -117,10 +117,10 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_contributing_common_kernel
     }
 
 #pragma unroll 1
-    for(uint32_t b = 0; b < num_batches; ++b)
+    for(int64_t b = 0; b < num_batches; ++b)
     {
-        const uint32_t batch_start = range_start + BATCH_SIZE * b;
-        const uint32_t idx         = batch_start + tid;
+        const int64_t batch_start = range_start + BATCH_SIZE * b;
+        const int64_t idx         = batch_start + tid;
         if(idx < range_end)
         {
             const int32_t g       = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
@@ -139,7 +139,8 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_contributing_common_kernel
             __syncthreads();
         }
 
-        const uint32_t batch_size = min(BATCH_SIZE, static_cast<uint32_t>(range_end - batch_start));
+        const int64_t remaining   = range_end - batch_start;
+        const uint32_t batch_size = static_cast<uint32_t>(remaining < BATCH_SIZE ? remaining : BATCH_SIZE);
         for(uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t)
         {
             const int32_t g        = id_batch[t];

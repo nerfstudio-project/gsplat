@@ -222,7 +222,7 @@ void launch_intersect_offset_sparse_kernel(
     const uint32_t tile_width,
     const uint32_t tile_height,
     // outputs
-    at::Tensor offsets // [num_active_tiles + 1] int32
+    at::Tensor offsets // [num_active_tiles + 1] int64
 );
 
 // One thread per pixel: tightly packs the dense tile id and raster-order in-tile

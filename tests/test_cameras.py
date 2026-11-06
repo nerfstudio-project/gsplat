@@ -788,16 +788,22 @@ class TestCameraModels:
 
         # Validity mismatch handling.
         #
-        # The validity flag is `not_behind_camera & converged & (theta <=
-        # max_angle) & valid_bounds`. Empirically, the FP-amplifier on this
-        # path is the Newton iteration that inverts the ftheta polynomial
-        # (`_eval_poly_inverse_horner_newton`); each iteration's residual is
-        # within ULP of the convergence threshold (|dx|<1e-6) for rays at
-        # high incidence (z near 0, theta near pi/2). ULP noise can
-        # flip the convergence flag, which then zeros image_point and flips
-        # validity. The flip is in INTERNAL Newton state -- not directly
-        # observable from outside the kernel -- so we cannot write a strict
-        # cross predicate ("a was just-converged, b was just-not-converged").
+        # The FTheta validity flag is `(theta_full < max_angle) &
+        # valid_bounds`, compared against the *pre-clamp* angle. Negative-z
+        # rays have `theta_full > pi/2`, so they survive only when max_angle
+        # exceeds their own theta_full and the projection lands in bounds.
+        # Empirically, the FP-amplifier on this path is the Newton iteration
+        # that inverts the ftheta polynomial
+        # (`_eval_poly_inverse_horner_newton`). Neither implementation gates
+        # validity on Newton's `converged` flag; both discard it. What flips
+        # is the value:
+        #   - ULP drift in `delta` moves `image_point` by a fraction of a
+        #     pixel and can flip `valid_bounds` for a ray on the image border;
+        #   - ULP drift in `theta_full` can flip `theta_full < max_angle` for
+        #     a ray on the cone edge.
+        # The drift is internal to the polynomial evaluation -- not observable
+        # from outside the kernel -- so we cannot write a strict cross
+        # predicate.
         # We rely on:
         #   interior assert (exact agreement off-band) -- regression catcher
         #   band flip-rate cap                        -- absorb FP noise
@@ -830,6 +836,8 @@ class TestCameraModels:
         boundary_mask = (theta_full > 1.0) | ((max_angle - theta_full).abs() < 5e-2)
 
         # Calibration trace (RTX PRO 2000):
+        # Measured before the behind-camera guard was dropped from the FTheta
+        # validity flag; negative-z rays inside max_angle were all invalid then.
         #   - boundary band: rays at theta > 1.3 rad or within 0.05 of max_angle
         #   - in-band flips:
         #       * 493/N_band  (1.52% of total)  ftheta[pinhole+p2a] arms
@@ -1000,6 +1008,65 @@ def test_projection_rejects_rays_beyond_max_angle(test_camera, ref_camera):
         f"validity divergence: cuda={test_valid.flatten().tolist()} "
         f"ref={ref_valid.flatten().tolist()}"
     )
+
+
+@pytest.mark.parametrize(
+    "reference_poly",
+    [
+        FThetaPolynomialType.ANGLE_TO_PIXELDIST,
+        FThetaPolynomialType.PIXELDIST_TO_ANGLE,
+    ],
+)
+def test_ftheta_camera_supports_negative_z_with_wide_fov(reference_poly):
+    """FTheta keeps rays behind z=0 when they remain inside max_angle."""
+    device = torch.device("cuda")
+    focal = 15.0
+    cx, cy = 160.0, 120.0
+    max_angle = math.radians(120.0)
+    ftheta_coeffs = FThetaCameraDistortionParameters(
+        reference_poly=reference_poly,
+        pixeldist_to_angle_poly=(0.0, 1.0 / focal, 0.0, 0.0, 0.0, 0.0),
+        angle_to_pixeldist_poly=(0.0, focal, 0.0, 0.0, 0.0, 0.0),
+        max_angle=max_angle,
+        linear_cde=(1.0, 0.0, 0.0),
+    )
+    camera_params = {
+        "camera_model": "ftheta",
+        "width": 320,
+        "height": 240,
+        "principal_points": torch.tensor([[cx, cy]], device=device),
+        "ftheta_coeffs": ftheta_coeffs,
+    }
+    cameras = (
+        create_camera_model(**camera_params),
+        _BaseCameraModel.create(**camera_params),
+    )
+    valid_theta = math.radians(100.0)
+    invalid_theta = max_angle + math.radians(1.0)
+    rays = torch.tensor(
+        [
+            [math.sin(valid_theta), 0.0, math.cos(valid_theta)],
+            [math.sin(invalid_theta), 0.0, math.cos(invalid_theta)],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+
+    # FTheta offsets the principal point by half a pixel because the image
+    # origin is the centre of the first pixel.
+    expected = torch.tensor([cx + 0.5 + focal * valid_theta, cy + 0.5], device=device)
+    for camera in cameras:
+        image_points, valid = camera.camera_ray_to_image_point(rays, 0.0)
+
+        assert valid.flatten().tolist() == [True, False]
+        # Reuse the file-wide FTheta budget above, calibrated to 1.05x the
+        # observed maximum CUDA/reference residual.
+        torch.testing.assert_close(
+            image_points.reshape(-1, 2)[0],
+            expected,
+            atol=1.6e-5,
+            rtol=1.8e-7,
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

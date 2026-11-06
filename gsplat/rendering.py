@@ -459,8 +459,14 @@ def rasterization(
             with_eval3d=True. Default is False.
         global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for
             sorting Gaussians during rasterization. When True, Gaussians are sorted by their
-            z-coordinate in camera space. When False, they are sorted by their Euclidean
-            distance from the camera origin. Default is True.
+            z-coordinate in camera space. When False, they are sorted by their Euclidean distance
+            from the camera origin. The UT projection kernel then uses Euclidean near/far culling
+            only for LiDAR and FTheta; forward-only camera models continue to use camera-space z
+            culling. A wide-FOV FTheta calibration therefore requires ``global_z_order=False`` to
+            render its beyond-180-degree band. The same setting also makes the D/ED depth channel
+            use Euclidean distance. An FTheta ``max_angle`` must come from calibration and must not
+            be raised merely to widen rendered FOV: its forward polynomial is trusted only over
+            ``[0, max_angle]``. Default is True.
         radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.
             For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape
             should be [..., C, 4].
@@ -701,11 +707,9 @@ def _maybe_evaluate_sh(
             # features is already [..., C, N, D]
             pass
     else:
-        camtoworlds = torch.inverse(viewmats)  # [..., C, 4, 4]
-        dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]  # [..., C, N, 3]
         masks = (radii > 0).all(dim=-1)  # [..., C, N]
         features = spherical_harmonics(
-            sh_degree, dirs, features, masks=masks
+            sh_degree, means, viewmats, features, masks=masks
         )  # [..., C, N, D]
         if clamp:
             # make it apple-to-apple with Inria's CUDA Backend.
@@ -1163,7 +1167,7 @@ def _rasterization(
 #             # viewdirs = F.normalize(viewdirs, dim=-1).detach()
 #             if sh_degree is None:
 #                 sh_degree = int(math.sqrt(colors.shape[1]) - 1)
-#             colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]
+#             colors = spherical_harmonics(sh_degree, means, viewmats, colors)
 
 #         background = (
 #             backgrounds[cid]

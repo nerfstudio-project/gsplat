@@ -65,10 +65,10 @@ __device__ __forceinline__ bool rasterize_to_pixels_3dgs_blend_fwd(
     const float px,
     const float py,
     const float *__restrict__ color_ptr, // colors + g * CDIM
-    const uint32_t gaussian_idx,         // running index, stored as cur_idx on hit
+    const int32_t intersection_offset,   // tile-relative intersection offset
     float &T,                            // transmittance, updated on accumulate
     float (&pix_out)[CDIM],              // per-channel accumulator, updated
-    uint32_t &cur_idx                    // last contributing gaussian, updated
+    int32_t &last_intersection_offset    // last contributing intersection, updated
 )
 {
     const float opac        = xy_opacity.z;
@@ -91,8 +91,8 @@ __device__ __forceinline__ bool rasterize_to_pixels_3dgs_blend_fwd(
     {
         pix_out[k] += color_ptr[k] * vis;
     }
-    cur_idx = gaussian_idx;
-    T       = next_T;
+    last_intersection_offset = intersection_offset;
+    T                        = next_T;
     return false;
 }
 
