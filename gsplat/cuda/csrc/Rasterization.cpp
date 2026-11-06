@@ -142,8 +142,8 @@ namespace
     )
     {
         TORCH_CHECK(
-            tile_size == 4 || tile_size == 16,
-            "Only tile_size in {4, 16} is supported for 3DGS rasterization, got ",
+            is_supported_3dgs_tile_size(tile_size),
+            "Only tile_size in {4, 16} (plus 8 on ROCm) is supported for 3DGS rasterization, got ",
             tile_size
         );
 

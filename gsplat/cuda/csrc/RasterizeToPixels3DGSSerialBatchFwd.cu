@@ -425,9 +425,16 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         {
             launch_variant.template operator()<4, 16>();
         }
+#    if USE_ROCM
+        else if(tile_size == 8)
+        {
+            // one wave64 per tile, one pixel per thread
+            launch_variant.template operator()<8, 64>();
+        }
+#    endif
         else
         {
-            AT_ERROR("Unsupported tile_size ", tile_size, "; supported values are {4, 16}.");
+            AT_ERROR("Unsupported tile_size ", tile_size, "; supported values are {4, 16} (plus 8 on ROCm).");
         }
     };
     const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
@@ -566,9 +573,16 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
         {
             launch_variant.template operator()<4, 16>();
         }
+#    if USE_ROCM
+        else if(tile_size == 8)
+        {
+            // one wave64 per tile, one pixel per thread
+            launch_variant.template operator()<8, 64>();
+        }
+#    endif
         else
         {
-            AT_ERROR("Unsupported tile_size ", tile_size, "; supported values are {4, 16}.");
+            AT_ERROR("Unsupported tile_size ", tile_size, "; supported values are {4, 16} (plus 8 on ROCm).");
         }
     };
     const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernels));
