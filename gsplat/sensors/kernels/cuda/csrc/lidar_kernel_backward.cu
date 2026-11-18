@@ -22,6 +22,7 @@
 // pose-grad reduction for generate, and the frozen-alpha IFT VJP for inverse.
 
 #include "lidar_kernel.cuh"
+#include "math.cuh"
 
 #include <c10/cuda/CUDAException.h>
 
@@ -67,7 +68,7 @@ __device__ __forceinline__ void lidar_block_reduce_pose(const T (&values)[14], T
     constexpr int kSlots    = 14;
     __shared__ T warp_sums[kNumWarps][kSlots];
 
-    const unsigned int mask = 0xFFFFFFFFu;
+    const WarpMask mask     = kFullWarpMask;
     const int lane          = threadIdx.x & 31;
     const int warp          = threadIdx.x >> 5;
 #pragma unroll

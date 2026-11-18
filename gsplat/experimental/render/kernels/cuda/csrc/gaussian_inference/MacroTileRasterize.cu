@@ -69,6 +69,7 @@
 #include "IntersectCommon.h"
 #include "IntersectMTConfig.h"
 #include "MacroTileRasterize.h"
+#include "WarpSync.h"
 
 namespace higs
 {
@@ -96,7 +97,7 @@ __device__ __forceinline__ uint32_t WarpBitTranspose(uint32_t val)
     {
         const int32_t delta  = 1 << k;
         const uint32_t m     = MASKS[4 - k];
-        const uint32_t other = __shfl_xor_sync(~0u, val, delta);
+        const uint32_t other = WarpShflXor32(val, delta);
         val = (lane_id & delta) ? (val & ~m) | ((other >> delta) & m) : (val & m) | ((other & m) << delta);
     }
     return val;
@@ -235,7 +236,7 @@ __global__ void __launch_bounds__(RASTERIZE_CTA_SIZE, RASTERIZE_MIN_BLOCKS) macr
     using TileAccum = __half2[N_PAIRS][4];
 
     // let NVCC know that warp_id is a warm uniform (doh!)
-    const int32_t warp_id = __shfl_sync(~0u, threadIdx.x >> 5, 0);
+    const int32_t warp_id = WarpShfl32(threadIdx.x >> 5, 0);
     const int32_t lane_id = threadIdx.x & 31;
 
     __shared__ alignas(16) char smem_raw[SMEM_SIZE];
@@ -439,8 +440,8 @@ __global__ void __launch_bounds__(RASTERIZE_CTA_SIZE, RASTERIZE_MIN_BLOCKS) macr
         const int32_t global_tile_x = mt_col * FUSED_MACRO_TILE_WIDTH + (lane_id % FUSED_MACRO_TILE_WIDTH);
         const int32_t global_tile_y = mt_row * FUSED_MACRO_TILE_HEIGHT + (lane_id / FUSED_MACRO_TILE_WIDTH);
         const uint32_t valid_mask
-            = __ballot_sync(~0u, (global_tile_x < args.tile_width) && (global_tile_y < args.tile_height));
-        const uint32_t active_mask = __ballot_sync(~0u, any_hit != 0) & valid_mask;
+            = WarpBallot32((global_tile_x < args.tile_width) && (global_tile_y < args.tile_height));
+        const uint32_t active_mask = WarpBallot32(any_hit != 0) & valid_mask;
 
         // populate tile work queue for multi-warp rasterization
         if(active_mask & (1u << lane_id))
@@ -629,7 +630,7 @@ __global__ void __launch_bounds__(RASTERIZE_CTA_SIZE, RASTERIZE_MIN_BLOCKS) macr
 #pragma unroll
                     for(int32_t k = 0; k < 4; ++k)
                     {
-                        other[pp][k] = __shfl_xor_sync(~0u, acc_rgbt[pp][k], 16);
+                        other[pp][k] = WarpShflXor32(acc_rgbt[pp][k], 16);
                     }
                 }
 #pragma unroll
@@ -666,7 +667,7 @@ __global__ void __launch_bounds__(RASTERIZE_CTA_SIZE, RASTERIZE_MIN_BLOCKS) macr
             // for N_PAIRS == 1, use ~0u for all pixels done
             constexpr uint32_t DONE_MASK = N_PAIRS == 1 ? ~0u : (((1u << N_PAIRS) - 1u) * 0x10001);
 
-            if(__ballot_sync(~0u, tile_done == DONE_MASK) == ~0u)
+            if(WarpBallot32(tile_done == DONE_MASK) == ~0u)
             {
                 break;
             }
@@ -716,7 +717,7 @@ __global__ void __launch_bounds__(RASTERIZE_CTA_SIZE, RASTERIZE_MIN_BLOCKS) macr
         {
             queue_idx = atomicAdd(&smem_queue_idx, 1);
         }
-        queue_idx = __shfl_sync(~0u, queue_idx, 0);
+        queue_idx = WarpShfl32(queue_idx, 0);
     }
 }
 
@@ -824,7 +825,7 @@ __global__ void __launch_bounds__(BLEND_CTA_SIZE, BLEND_MIN_BLOCKS) macro_tile_p
         constexpr uint32_t DONE_MASK = N_PAIRS == 1 ? ~0u : (((1u << N_PAIRS) - 1u) * 0x10001);
 
         // warp-wide early exit: all pixels in this tile are saturated
-        if(__ballot_sync(~0u, tile_done == DONE_MASK) == ~0u)
+        if(WarpBallot32(tile_done == DONE_MASK) == ~0u)
         {
             break;
         }

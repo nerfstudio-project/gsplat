@@ -24,8 +24,13 @@
 #include <ATen/ops/empty.h>
 #include <ATen/ops/zeros.h>
 #include <c10/cuda/CUDAStream.h>
+#if defined(USE_ROCM) || defined(__HIP_PLATFORM_AMD__)
+#include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#else
 #include <cub/block/block_scan.cuh>
 #include <cub/warp/warp_scan.cuh>
+#endif
 
 #include "IntersectCommon.h"
 #include "IntersectMTConfig.h"

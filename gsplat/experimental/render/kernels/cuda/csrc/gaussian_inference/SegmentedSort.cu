@@ -16,8 +16,14 @@
  */
 
 #include <cmath>
+#if defined(USE_ROCM) || defined(__HIP_PLATFORM_AMD__)
+#include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#else
 #include <cub/block/block_radix_rank.cuh>
+#endif
 #include "SegmentedSort.h"
+#include "WarpSync.h"
 
 // terminology used throughout this file:
 //
@@ -39,6 +45,19 @@ namespace higs
 {
 namespace seg_sort
 {
+    // Backoff hint inside spin-waits. CUDA has __nanosleep(ns); AMD GCN exposes
+    // s_sleep (argument in units of ~64 cycles, range 0-15), so approximate the
+    // short backoff with a small sleep. Only a latency hint — correctness does
+    // not depend on the exact duration.
+    __device__ __forceinline__ void SpinBackoff()
+    {
+#if defined(USE_ROCM) || defined(__HIP_PLATFORM_AMD__)
+        __builtin_amdgcn_s_sleep(1);
+#else
+        __nanosleep(32);
+#endif
+    }
+
     // block sort (cascade) — shared by all tiers
     static constexpr int BLOCK_SORT_ITEMS_PER_THREAD = 16;
     static constexpr int BLOCK_SORT_RADIX_BITS       = 8;
@@ -98,9 +117,15 @@ namespace seg_sort
     // visibility (not ordering) is needed.
     __device__ __forceinline__ int LoadRelaxedGpu(const int *addr)
     {
+#if defined(USE_ROCM) || defined(__HIP_PLATFORM_AMD__)
+        // Device-scope relaxed atomic load: same visibility-without-ordering
+        // semantics as the PTX ld.relaxed.gpu, using the HIP/Clang builtin.
+        return __hip_atomic_load(addr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+#else
         int val;
         asm volatile("ld.relaxed.gpu.b32 %0, [%1];" : "=r"(val) : "l"(addr));
         return val;
+#endif
     }
 
     // tiled merge-path for one MERGE_PARTITION_SIZE chunk of a 2-way merge.
@@ -188,7 +213,7 @@ namespace seg_sort
                 const int range        = hi - lo;
                 const int probe        = lo + div33(range, lane + 1);
                 const bool take_more_a = (a_keys[probe] <= b_keys[diag - probe - 1]);
-                const uint32_t ballot  = __ballot_sync(0xFFFFFFFF, take_more_a);
+                const uint32_t ballot  = WarpBallot32(take_more_a);
                 const int n_true       = __popc(ballot);
 
                 // 32 probes create 33 sub-intervals. n_true tells us which one
@@ -361,7 +386,7 @@ namespace seg_sort
             }
         }
 
-        q_base = __shfl_sync(0xFFFFFFFF, q_base, 0);
+        q_base = WarpShfl32(q_base, 0);
         if(q_base < 0)
         {
             return;
@@ -379,7 +404,7 @@ namespace seg_sort
             __threadfence(); // release: entry writes visible before queue_tail commit
             while(atomicCAS(&args.queue_state->queue_tail, q_base, q_base + parent_n_partitions) != q_base)
             {
-                __nanosleep(32);
+                SpinBackoff();
             }
         }
     }
@@ -426,7 +451,7 @@ namespace seg_sort
             {
                 while(pos >= LoadRelaxedGpu(&args.queue_state->queue_tail))
                 {
-                    __nanosleep(32);
+                    SpinBackoff();
                 }
             }
             __syncthreads(); // broadcast spin completion to all threads
@@ -1067,9 +1092,16 @@ int SegmentedSortAsync(
            .values_out_b    = d_values[1],
            .keys_out_b      = d_keys[1]};
 
-    // PDL attribute: allows the driver to overlap consecutive tier launches on
-    // SM 9.0+. on older hardware the attribute is silently ignored and the
-    // kernels execute with normal stream serialization.
+    // PDL (programmatic dependent launch) lets the driver overlap consecutive
+    // tier launches on SM 9.0+. HIP has no equivalent, so fall back to a plain
+    // stream-ordered launch: the tiers simply serialize on the stream, which is
+    // correct — just without the cross-tier overlap optimization.
+#if defined(USE_ROCM) || defined(__HIP_PLATFORM_AMD__)
+    auto launchPdl = [&](auto kernel_fn, int block_threads, const BlockSortArgs &args)
+    {
+        kernel_fn<<<dim3(st.n_segments), dim3(block_threads), 0, s>>>(args);
+    };
+#else
     cudaLaunchAttribute pdl_attr;
     pdl_attr.id                                         = cudaLaunchAttributeProgrammaticStreamSerialization;
     pdl_attr.val.programmaticStreamSerializationAllowed = 1;
@@ -1084,6 +1116,7 @@ int SegmentedSortAsync(
         config.numAttrs           = 1;
         cudaLaunchKernelEx(&config, kernel_fn, args);
     };
+#endif
 
     // T0: first in chain, normal launch
     BlockSortKernel<BLOCK_SORT_T0_CTA_SIZE, BLOCK_SORT_T0_MIN_SIZE>

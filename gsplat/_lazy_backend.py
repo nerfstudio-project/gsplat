@@ -65,7 +65,15 @@ def cuda_toolkit_available() -> bool:
     """
     from subprocess import DEVNULL, call
 
+    import torch
+
     import torch.utils.cpp_extension as jit
+
+    # Under ROCm, torch is built against HIP and the "toolkit" is hipcc, not
+    # nvcc. Treat a HIP torch build as toolkit-available so HIP JIT builds are
+    # attempted instead of being skipped by the nvcc-only probe below.
+    if getattr(torch.version, "hip", None):
+        return True
 
     cuda_home = jit._find_cuda_home()  # tries various heuristics
     if not cuda_home:

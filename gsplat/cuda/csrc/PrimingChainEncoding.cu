@@ -11,8 +11,13 @@
 
 #if GSPLAT_BUILD_3DGUT
 
-#    include <ATen/cuda/CUDAContext.h>
-#    include <c10/cuda/CUDAGuard.h>
+#    if USE_ROCM
+#        include <ATen/hip/HIPContext.h>
+#        include <c10/hip/HIPGuard.h>
+#    else
+#        include <ATen/cuda/CUDAContext.h>
+#        include <c10/cuda/CUDAGuard.h>
+#    endif
 #    include <torch/extension.h>
 
 #    include "PrimingChainEncoding.cuh"

@@ -18,7 +18,6 @@
 #pragma once
 
 #include <ATen/core/Tensor.h>
-#include <c10/cuda/CUDAStream.h>
 
 #include "Common.h"
 #include "RasterizeContributingCommon.cuh"
@@ -69,12 +68,23 @@ void launch_contributing_dense(
         const int64_t shmem_size             = rasterize_contributing_common_shmem_size<CTA_SIZE>()
                                              + accum.extra_shmem_bytes(CTA_SIZE * PIXELS_PER_THREAD);
 
+#    ifndef USE_ROCM
         if(cudaFuncSetAttribute(
                rasterize_contributing_common_kernel<TILE_SIZE, CTA_SIZE, Accumulator>,
                cudaFuncAttributeMaxDynamicSharedMemorySize,
                shmem_size
            )
            != cudaSuccess)
+#    else
+        if(hipFuncSetAttribute(
+               reinterpret_cast<void *>(
+                   rasterize_contributing_common_kernel<TILE_SIZE, CTA_SIZE, Accumulator>
+               ),
+               hipFuncAttributeMaxDynamicSharedMemorySize,
+               static_cast<int>(shmem_size)
+           )
+           != hipSuccess)
+#    endif
         {
             AT_ERROR(
                 "Failed to set maximum shared memory size (requested ",
@@ -147,12 +157,23 @@ void launch_contributing_sparse(
         const int64_t shmem_size             = rasterize_contributing_common_shmem_size<CTA_SIZE>()
                                              + accum.extra_shmem_bytes(CTA_SIZE * PIXELS_PER_THREAD);
 
+#    ifndef USE_ROCM
         if(cudaFuncSetAttribute(
                rasterize_contributing_common_sparse_kernel<TILE_SIZE, CTA_SIZE, Accumulator>,
                cudaFuncAttributeMaxDynamicSharedMemorySize,
                shmem_size
            )
            != cudaSuccess)
+#    else
+        if(hipFuncSetAttribute(
+               reinterpret_cast<void *>(
+                   rasterize_contributing_common_sparse_kernel<TILE_SIZE, CTA_SIZE, Accumulator>
+               ),
+               hipFuncAttributeMaxDynamicSharedMemorySize,
+               static_cast<int>(shmem_size)
+           )
+           != hipSuccess)
+#    endif
         {
             AT_ERROR(
                 "Failed to set maximum shared memory size (requested ",

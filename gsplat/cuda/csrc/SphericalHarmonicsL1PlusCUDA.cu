@@ -25,7 +25,11 @@
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
 #include <array>
-#include <cooperative_groups.h>
+#if USE_ROCM
+#    include <hip/hip_cooperative_groups.h>
+#else
+#    include <cooperative_groups.h>
+#endif
 #include <vector>
 
 #include "Common.h"
@@ -756,12 +760,15 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
     }
 
     scalar_t *v_coeffs_ptr = v_coeffs + coeff_id * K * D;
+    // Index the underlying storage: std::array::operator[] is a host-only member
+    // in libstdc++ and is rejected inside device code under HIP.
+    const opmath_t *acc_data = acc.data();
 #pragma unroll
     for(int k = 0; k < MAX_K; ++k)
     {
         if(static_cast<uint32_t>(k) < K)
         {
-            v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(acc[k]);
+            v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(acc_data[k]);
         }
     }
     // Padded bases may allocate K > MAX_K; zero the tail so at::empty outputs are defined.
@@ -927,7 +934,7 @@ void launch_spherical_harmonics_l1_plus_bwd_kernels(
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
-        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[device_id], cudaEventDisableTiming));
         C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
     }
 

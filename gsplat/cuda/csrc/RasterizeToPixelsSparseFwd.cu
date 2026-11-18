@@ -312,6 +312,7 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
             const dim3 threads       = dim3{CTA_SIZE, 1, 1};
             const int64_t shmem_size = CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 
+#    ifndef USE_ROCM
             if(cudaFuncSetAttribute(
                    rasterize_to_pixels_sparse_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
                    cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -325,6 +326,24 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
                     " bytes), try lowering tile_size."
                 );
             }
+#    else
+            hipError_t err = hipFuncSetAttribute(
+                reinterpret_cast<void *>(
+                    rasterize_to_pixels_sparse_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
+                ),
+                hipFuncAttributeMaxDynamicSharedMemorySize,
+                static_cast<int>(shmem_size)
+            );
+            if(err != hipSuccess)
+            {
+                AT_ERROR(
+                    "Failed to set maximum shared memory size (requested ",
+                    shmem_size,
+                    " bytes), try lowering tile_size. HIP Error: ",
+                    hipGetErrorString(err)
+                );
+            }
+#    endif
 
             const float *bg_ptr   = backgrounds.has_value() ? backgrounds.value().const_data_ptr<float>() : nullptr;
             const bool *masks_ptr = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;

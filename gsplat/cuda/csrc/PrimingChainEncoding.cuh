@@ -7,7 +7,11 @@
 
 #include <cassert>
 #include <cstdint>
-#include <cuda_fp16.h>
+#ifndef USE_ROCM
+#    include <cuda_fp16.h>
+#else
+#    include <hip/hip_fp16.h>
+#endif
 
 #include "Common.h" // GSPLAT_HOST_DEVICE
 
@@ -107,7 +111,7 @@ constexpr uint32_t INVALID_RAY_PACKED = encode_from_fp16_bits(0u, 0, true);
 
 static_assert(INVALID_RAY_PACKED == 0u, "invalid ray sentinel must remain the atomicMin floor");
 
-#ifdef __CUDACC__
+#if defined(__CUDACC__) || defined(__HIP__)
 
 struct DecodeForBatchResult
 {
@@ -199,5 +203,5 @@ __device__ __forceinline__ float get_T(uint32_t packed)
     return T;
 }
 
-#endif // __CUDACC__
+#endif // defined(__CUDACC__) || defined(__HIP__)
 } // namespace gsplat::priming
