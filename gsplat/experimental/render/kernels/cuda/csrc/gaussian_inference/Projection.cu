@@ -27,6 +27,7 @@
 #include "Utils.cuh"
 #include "Projection.h"
 #include "Utils.h"
+#include "WarpSync.h"
 
 namespace higs
 {
@@ -167,7 +168,11 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
         {
         case CameraModelType::PINHOLE:
             gsplat::persp_proj(
-                mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height, covar2d, mean2d
+                mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height,
+#if USE_ROCM
+                near_plane,
+#endif
+                covar2d, mean2d
             );
             break;
         case CameraModelType::ORTHO:
@@ -180,6 +185,10 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
                 mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height, covar2d, mean2d
             );
             break;
+        case CameraModelType::FTHETA:
+        case CameraModelType::LIDAR:
+            // EWA projection does not support these models; host validates before launch.
+            return false;
         }
 
         float compensation;
@@ -268,7 +277,7 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
     };
 
     const bool is_visible   = processGaussian();
-    const uint32_t ballot   = __ballot_sync(~0u, is_visible);
+    const uint32_t ballot   = WarpBallot32(is_visible);
     const int32_t word_idx  = idx >> 5;
     const int32_t num_words = (B * C * N + 31) >> 5;
     if(lane == 0 && word_idx < num_words)

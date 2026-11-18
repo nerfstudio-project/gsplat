@@ -138,7 +138,7 @@ __device__ __forceinline__ void reduce_ftheta_bivariate_grads(
         values[BIVARIATE_H_POLY_TERMS + i] = local.v_poly[i];
     }
 
-    unsigned int mask = 0xFFFFFFFFu;
+    WarpMask mask     = kFullWarpMask;
     int lane          = threadIdx.x & 31;
     int warp          = threadIdx.x >> 5;
 #pragma unroll

@@ -1,0 +1,31 @@
+#pragma once
+
+namespace cuda
+{
+
+enum memory_order
+{
+    memory_order_relaxed = __ATOMIC_RELAXED
+};
+
+struct thread_scope_device
+{
+};
+
+template<typename T, typename Scope = thread_scope_device>
+struct atomic_ref
+{
+    T *ptr_;
+
+    __host__ __device__ explicit atomic_ref(T &obj) : ptr_(&obj) {}
+
+    __host__ __device__ T load(memory_order order = memory_order_relaxed) const
+    {
+        (void)order;
+        T val{};
+        __atomic_load(ptr_, &val, __ATOMIC_RELAXED);
+        return val;
+    }
+};
+
+} // namespace cuda

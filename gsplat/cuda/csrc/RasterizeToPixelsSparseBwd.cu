@@ -21,7 +21,7 @@
 
 #    include <ATen/Dispatch.h>
 #    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
+#    include "ATenAtomic.cuh"
 #    include <c10/cuda/CUDAStream.h>
 #    include <cooperative_groups.h>
 
@@ -127,6 +127,10 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
     vec3 *xy_opacity_batch = reinterpret_cast<vec3 *>(&id_batch[block_size]);
     vec3 *conic_batch      = reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]);
     float *rgbs_batch      = (float *)&conic_batch[block_size]; // [block_size * CDIM]
+#    if USE_ROCM
+    using warp_reduce_float_t = rocprim::warp_reduce<float, 64>;
+    auto *warp_storage_base   = (typename warp_reduce_float_t::storage_type *)(rgbs_batch + block_size * CDIM);
+#    endif
 
     // this is the T AFTER the last gaussian in this pixel
     const float T_final     = inside ? 1.0f - render_alphas[out_idx] : 0.0f;
@@ -145,9 +149,14 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
     }
     const float v_render_a = inside ? v_render_alphas[out_idx] : 0.0f;
 
-    const uint32_t tr              = block.thread_rank();
+    const uint32_t tr = block.thread_rank();
+#    if USE_ROCM
+    cg::thread_block_tile<64> warp = cg::tiled_partition<64>(block);
+    const int32_t warp_bin_final   = reduce_max_shuffle(bin_final);
+#    else
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
     const int32_t warp_bin_final   = cg::reduce(warp, bin_final, cg::greater<int>());
+#    endif
     for(int64_t b = 0; b < num_batches; ++b)
     {
         // resync all threads before writing next batch of shared mem
@@ -240,6 +249,16 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
                     v_opacity_local
                 );
             }
+#    if USE_ROCM
+            rocprim_warpSum<CDIM, 64>(v_rgb_local, warp_storage_base);
+            rocprim_warpSum<64>(v_conic_local, warp_storage_base);
+            rocprim_warpSum<64>(v_xy_local, warp_storage_base);
+            if(v_means2d_abs != nullptr)
+            {
+                rocprim_warpSum<64>(v_xy_abs_local, warp_storage_base);
+            }
+            rocprim_warpSum<64>(v_opacity_local, warp_storage_base);
+#    else
             warpSum<CDIM>(v_rgb_local, warp);
             warpSum(v_conic_local, warp);
             warpSum(v_xy_local, warp);
@@ -248,6 +267,7 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
                 warpSum(v_xy_abs_local, warp);
             }
             warpSum(v_opacity_local, warp);
+#    endif
             if(warp.thread_rank() == 0)
             {
                 int32_t g        = id_batch[t]; // flatten index in [I * N] or [nnz]
@@ -255,10 +275,32 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
 #    pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
+#    if USE_ROCM
+                    unsafeAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+#    else
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+#    endif
                 }
 
                 float *v_conic_ptr = (float *)(v_conics) + 3 * g;
+#    if USE_ROCM
+                unsafeAtomicAdd(v_conic_ptr, v_conic_local.x);
+                unsafeAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
+                unsafeAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
+
+                float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
+                unsafeAtomicAdd(v_xy_ptr, v_xy_local.x);
+                unsafeAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
+
+                if(v_means2d_abs != nullptr)
+                {
+                    float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
+                    unsafeAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+                    unsafeAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                }
+
+                unsafeAtomicAdd(v_opacities + g, v_opacity_local);
+#    else
                 gpuAtomicAdd(v_conic_ptr, v_conic_local.x);
                 gpuAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
                 gpuAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
@@ -275,6 +317,7 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
                 }
 
                 gpuAtomicAdd(v_opacities + g, v_opacity_local);
+#    endif
             }
         }
     }
@@ -339,9 +382,21 @@ void launch_rasterize_to_pixels_sparse_bwd_kernel(
     {
         constexpr uint32_t CDIM = ChannelsT::value;
 
+#    if USE_ROCM
+        const uint32_t block_size = tile_size * tile_size;
+        const uint32_t warps_per_block = (block_size + 63) / 64;
+        std::size_t warp_scratch_bytes
+            = warps_per_block * sizeof(typename rocprim::warp_reduce<float, 64>::storage_type);
+        int64_t shmem_size = tile_size
+                           * tile_size
+                           * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(float) * CDIM)
+                           + warp_scratch_bytes;
+#    else
         int64_t shmem_size
             = tile_size * tile_size * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(float) * CDIM);
+#    endif
 
+#    ifndef USE_ROCM
         if(cudaFuncSetAttribute(
                rasterize_to_pixels_sparse_bwd_kernel<CDIM>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_size
            )
@@ -351,6 +406,22 @@ void launch_rasterize_to_pixels_sparse_bwd_kernel(
                 "Failed to set maximum shared memory size (requested ", shmem_size, " bytes), try lowering tile_size."
             );
         }
+#    else
+        hipError_t err = hipFuncSetAttribute(
+            reinterpret_cast<void *>(rasterize_to_pixels_sparse_bwd_kernel<CDIM>),
+            hipFuncAttributeMaxDynamicSharedMemorySize,
+            static_cast<int>(shmem_size)
+        );
+        if(err != hipSuccess)
+        {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size,
+                " bytes), try lowering tile_size. HIP Error: ",
+                hipGetErrorString(err)
+            );
+        }
+#    endif
 
         rasterize_to_pixels_sparse_bwd_kernel<CDIM><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
             reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),

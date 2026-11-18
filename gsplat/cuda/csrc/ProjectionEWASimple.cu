@@ -74,7 +74,11 @@ __global__ void projection_ewa_simple_fwd_kernel(
     switch(camera_model)
     {
     case CameraModelType::PINHOLE: // perspective projection
+    #if USE_ROCM
+        persp_proj(mean, covar, fx, fy, cx, cy, width, height, 0.0f, covar2d, mean2d);
+    #else
         persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+    #endif
         break;
     case CameraModelType::ORTHO: // orthographic projection
         ortho_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
@@ -82,6 +86,10 @@ __global__ void projection_ewa_simple_fwd_kernel(
     case CameraModelType::FISHEYE: // fisheye projection
         fisheye_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
         break;
+    case CameraModelType::FTHETA:
+    case CameraModelType::LIDAR:
+        // EWA projection does not support these models; host validates before launch.
+        return;
     }
 
 // write to outputs: glm is column-major but we want row-major
@@ -134,7 +142,7 @@ void launch_projection_ewa_simple_fwd_kernel(
         "projection_ewa_simple_fwd_kernel",
         [&]()
         {
-            projection_ewa_simple_fwd_kernel<scalar_t><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            projection_ewa_simple_fwd_kernel<scalar_t><<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
                 B,
                 C,
                 N,
@@ -213,6 +221,10 @@ __global__ void projection_ewa_simple_bwd_kernel(
             mean, covar, fx, fy, cx, cy, width, height, glm::transpose(v_covar2d), v_mean2d, v_mean, v_covar
         );
         break;
+    case CameraModelType::FTHETA:
+    case CameraModelType::LIDAR:
+        // EWA projection does not support these models; host validates before launch.
+        return;
     }
 
 // write to outputs: glm is column-major but we want row-major
@@ -268,7 +280,7 @@ void launch_projection_ewa_simple_bwd_kernel(
         "projection_ewa_simple_bwd_kernel",
         [&]()
         {
-            projection_ewa_simple_bwd_kernel<scalar_t><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            projection_ewa_simple_bwd_kernel<scalar_t><<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
                 B,
                 C,
                 N,

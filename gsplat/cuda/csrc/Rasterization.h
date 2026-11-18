@@ -39,6 +39,18 @@ namespace gsplat
 {
 #define FILTER_INV_SQUARE_2DGS 2.0f
 
+// Tile sizes supported by the classic 3DGS rasterizer. ROCm additionally
+// supports tile_size 8 (64 threads == one wave64), which uses the wave-optimized
+// backward kernel on MI300-class GPUs.
+inline bool is_supported_3dgs_tile_size(uint32_t tile_size)
+{
+#ifdef USE_ROCM
+    return tile_size == 4 || tile_size == 8 || tile_size == 16;
+#else
+    return tile_size == 4 || tile_size == 16;
+#endif
+}
+
 // Public outputs of rasterize_to_pixels_3dgs (the forward-internal last_ids is
 // dropped).
 struct RasterizeToPixels3DGSResult

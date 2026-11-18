@@ -19,6 +19,7 @@
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h> // at::cuda::getCurrentCUDAStream
 
+#include "Common.h"
 #include "Null.h"
 
 // #include "Utils.cuh" // optionally include some shared utility functions
@@ -69,7 +70,7 @@ void launch_null_kernel(const at::Tensor input, at::Tensor output)
         [&]()
         {
             scalar_t unused = 0;
-            null_kernel<scalar_t><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            null_kernel<scalar_t><<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
                 n_elements, input.const_data_ptr<scalar_t>(), output.data_ptr<scalar_t>(), unused
             );
         }

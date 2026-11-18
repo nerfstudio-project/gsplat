@@ -27,10 +27,20 @@
 
 // for CUB_WRAPPER
 #include <c10/cuda/CUDACachingAllocator.h>
-#include <cub/cub.cuh>
+#if USE_ROCM
+#    include <hipcub/device/device_radix_sort.hpp>
+#    include <hipcub/device/device_segmented_radix_sort.hpp>
+#    include <hipcub/device/device_scan.hpp>
+#    include <hipcub/device/device_merge_sort.hpp>
+#    include <hipcub/util_type.hpp>
+#else
+#    include <cub/cub.cuh>
+#endif
 
 #include "MathUtils.h"
 #include "Common.h"
+#include "Common.cuh"
+
 #include "Intersect.h"
 #include "Utils.cuh"
 
@@ -530,7 +540,7 @@ void launch_intersect_tile_kernel(
         return;
     }
 
-    auto stream = at::cuda::getCurrentCUDAStream();
+    auto stream = GET_CURRENT_STREAM();
     AT_DISPATCH_FLOATING_TYPES(
         means2d.scalar_type(),
         "intersect_tile_kernel",
@@ -1011,7 +1021,7 @@ void launch_intersect_offset_kernel(
     // Must match the packing in launch_intersect_tile_kernel so the (image,
     // tile) id unpacks with the same field width it was packed with.
     const uint32_t tile_n_bits = bits_for_count(n_tiles);
-    auto stream                = at::cuda::getCurrentCUDAStream();
+    auto stream = GET_CURRENT_STREAM();
     intersect_offset_kernel<<<blocks, threads, 0, stream>>>(
         0,
         n_elements,
@@ -1100,7 +1110,7 @@ void radix_sort_double_buffer(
         n_isects,
         0,
         32 + tile_n_bits + image_n_bits,
-        at::cuda::getCurrentCUDAStream()
+        GET_CURRENT_STREAM()
     );
     switch(d_keys.selector)
     {
@@ -1155,7 +1165,7 @@ void segmented_radix_sort_double_buffer(
         offsets.data_ptr<int64_t>() + 1,
         0,
         32 + tile_n_bits,
-        at::cuda::getCurrentCUDAStream()
+        GET_CURRENT_STREAM()
     );
     switch(d_keys.selector)
     {

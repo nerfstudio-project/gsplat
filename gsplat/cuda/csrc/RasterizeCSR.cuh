@@ -112,7 +112,7 @@ at::Tensor compute_bid_to_slot(
     at::TensorOptions dummy_options
 );
 
-#ifdef __CUDACC__
+#if defined(__CUDACC__) || defined(__HIP__)
 template<uint32_t CDIM, bool ReturnNormals, typename scalar_t>
 class FwdBatchSlotView
 {
@@ -373,5 +373,5 @@ __device__ __forceinline__ uint32_t
     }
     return lo;
 }
-#endif // __CUDACC__
+#endif // defined(__CUDACC__) || defined(__HIP__)
 } // namespace gsplat

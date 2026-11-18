@@ -19,13 +19,17 @@
 #include <ATen/Dispatch_v2.h>
 #include <ATen/OpMathType.h>
 #include <ATen/core/Tensor.h>
-#include <ATen/cuda/Atomic.cuh>
 #include <ATen/ops/empty.h>
 #include <ATen/ops/zeros.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAStream.h>
+#if USE_ROCM
+#    include <hip/hip_cooperative_groups.h>
+#else
+#    include <c10/cuda/CUDAException.h>
+#    include <c10/cuda/CUDAStream.h>
+#    include <cooperative_groups.h>
+#endif
+#include "ATenAtomic.cuh"
 #include <array>
-#include <cooperative_groups.h>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -1348,6 +1352,7 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
                 static int configured_smem = -1;
                 if(static_cast<int>(smem) > configured_smem)
                 {
+#    ifndef USE_ROCM
                     if(cudaFuncSetAttribute(
                            assemble_proj_features_kernel<
                                CoeffT,
@@ -1373,6 +1378,36 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
                             "); shape exceeds this device's shared-memory budget."
                         );
                     }
+#    else
+                    hipError_t err = hipFuncSetAttribute(
+                        reinterpret_cast<void *>(
+                            assemble_proj_features_kernel<
+                                CoeffT,
+                                float,
+                                DEGREE,
+                                /*K16FAST=*/true,
+                                HAS_DEPTH,
+                                DEPTH_ZERO,
+                                HAS_MASK,
+                                EMIT_RELU
+                            >
+                        ),
+                        hipFuncAttributeMaxDynamicSharedMemorySize,
+                        static_cast<int>(smem)
+                    );
+                    if(err != hipSuccess)
+                    {
+                        AT_ERROR(
+                            "assemble_proj_features: failed to set dynamic shared "
+                            "memory (requested ",
+                            smem,
+                            " bytes; width=",
+                            width,
+                            "); HIP Error: ",
+                            hipGetErrorString(err)
+                        );
+                    }
+#    endif
                     configured_smem = static_cast<int>(smem);
                 }
                 assemble_proj_features_kernel<
@@ -1434,6 +1469,7 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
                 static int configured_smem = -1;
                 if(static_cast<int>(smem) > configured_smem)
                 {
+#    ifndef USE_ROCM
                     if(cudaFuncSetAttribute(
                            assemble_proj_features_kernel<
                                CoeffT,
@@ -1464,6 +1500,40 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
                             "shared-memory budget."
                         );
                     }
+#    else
+                    hipError_t err = hipFuncSetAttribute(
+                        reinterpret_cast<void *>(
+                            assemble_proj_features_kernel<
+                                CoeffT,
+                                float,
+                                /*DEGREE=*/0,
+                                /*K16FAST=*/false,
+                                HAS_DEPTH,
+                                DEPTH_ZERO,
+                                HAS_MASK,
+                                EMIT_RELU
+                            >
+                        ),
+                        hipFuncAttributeMaxDynamicSharedMemorySize,
+                        static_cast<int>(smem)
+                    );
+                    if(err != hipSuccess)
+                    {
+                        AT_ERROR(
+                            "assemble_proj_features: failed to set dynamic shared "
+                            "memory (requested ",
+                            smem,
+                            " bytes; width=",
+                            width,
+                            ", K=",
+                            K,
+                            ", Dc=",
+                            Dc,
+                            "); HIP Error: ",
+                            hipGetErrorString(err)
+                        );
+                    }
+#    endif
                     configured_smem = static_cast<int>(smem);
                 }
                 assemble_proj_features_kernel<
@@ -1548,7 +1618,7 @@ void launch_spherical_harmonics_bwd_kernels(
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
-        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[device_id], cudaEventDisableTiming));
         C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
     }
 

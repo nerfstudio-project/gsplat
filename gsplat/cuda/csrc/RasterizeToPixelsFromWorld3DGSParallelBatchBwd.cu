@@ -23,9 +23,12 @@
 #    include <ATen/Dispatch.h>
 #    include <ATen/Functions.h>
 #    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
-#    include <ATen/cuda/cub.h>
-#    include <c10/cuda/CUDAStream.h>
+#    include "ATenAtomic.cuh"
+#    ifdef USE_ROCM
+#        include <ATen/hip/cub.h>
+#    else
+#        include <ATen/cuda/cub.h>
+#    endif
 #    include <cooperative_groups.h>
 #    include <cstdint>
 #    include <cuda/std/optional>
@@ -135,7 +138,7 @@ std::tuple<at::Tensor, at::Tensor, int64_t> compute_batch_csr(
     {
         const uint32_t threads_per_block = 256;
         const uint32_t blocks            = (num_tiles + threads_per_block - 1) / threads_per_block;
-        compute_batches_per_tile_kernel<<<blocks, threads_per_block, 0, at::cuda::getCurrentCUDAStream()>>>(
+        compute_batches_per_tile_kernel<<<blocks, threads_per_block, 0, GET_CURRENT_STREAM()>>>(
             tile_offsets.const_data_ptr<int64_t>(),
             num_tiles,
             n_isects,
@@ -218,7 +221,7 @@ at::Tensor compute_bid_to_slot(
 
     const uint32_t threads_per_block = 256;
     const uint32_t blocks            = (num_tiles + threads_per_block - 1) / threads_per_block;
-    auto stream                      = at::cuda::getCurrentCUDAStream();
+    auto stream = GET_CURRENT_STREAM();
     emit_round_major_pairs_kernel<<<blocks, threads_per_block, 0, stream>>>(
         batches_per_tile.const_data_ptr<int32_t>(),
         batch_offsets.const_data_ptr<int32_t>(),
@@ -231,6 +234,10 @@ at::Tensor compute_bid_to_slot(
     // Sort by `(batch_round, tile)` while carrying the original tile-major
     // slot as the value. The sorted values are the launch-index to slot
     // permutation; no extra scatter is needed.
+#    ifdef USE_ROCM
+#        pragma push_macro("cub")
+#        undef cub
+#    endif
     at::cuda::cub::radix_sort_pairs<int64_t, int32_t>(
         sort_keys.const_data_ptr<int64_t>(),
         sorted_keys.data_ptr<int64_t>(),
@@ -241,6 +248,9 @@ at::Tensor compute_bid_to_slot(
         /*begin_bit=*/0,
         /*end_bit=*/static_cast<int64_t>(total_bits == 0 ? 1u : total_bits)
     );
+#    ifdef USE_ROCM
+#        pragma pop_macro("cub")
+#    endif
 
     return bid_to_slot;
 }
@@ -579,9 +589,23 @@ __global__ void rasterize_gradient_bwd_kernel(
     vec3 *scale_batch       = reinterpret_cast<vec3 *>(&xyz_opacity_batch[block_size]);
     vec4 *quat_batch        = reinterpret_cast<vec4 *>(&scale_batch[block_size]);
     float *rgbs_batch       = (float *)&quat_batch[block_size];
+#    if USE_ROCM
+    using warp_reduce_float_t = rocprim::warp_reduce<float, 64>;
+    auto *warp_storage_base   = (typename warp_reduce_float_t::storage_type *)(
+        rgbs_batch + block_size * cdim_smem_stride<CDIM>()
+    );
+#    endif
 
+#    if USE_ROCM
+    cg::thread_block_tile<64> warp = cg::tiled_partition<64>(block);
+#    else
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int32_t warp_bin_final   = cg::reduce(warp, bin_final, cg::greater<int>());
+#    endif
+#    if USE_ROCM
+    const int32_t warp_bin_final = reduce_max_shuffle(bin_final);
+#    else
+    const int32_t warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+#    endif
 
     // ---- Batch walk: this CTA owns one front-aligned depth batch ----
     {
@@ -899,11 +923,19 @@ __global__ void rasterize_gradient_bwd_kernel(
                     normal_accum_dot += normal_render_dot * fac;
                 }
             }
+#    if USE_ROCM
+            rocprim_warpSum<CDIM, 64>(v_rgb_local, warp_storage_base);
+            rocprim_warpSum<64>(v_mean_local, warp_storage_base);
+            rocprim_warpSum<64>(v_scale_local, warp_storage_base);
+            rocprim_warpSum<64>(v_quat_local, warp_storage_base);
+            rocprim_warpSum<64>(v_opacity_local, warp_storage_base);
+#    else
             warpSum<CDIM>(v_rgb_local, warp);
             warpSum(v_mean_local, warp);
             warpSum(v_scale_local, warp);
             warpSum(v_quat_local, warp);
             warpSum(v_opacity_local, warp);
+#    endif
             if(warp.thread_rank() == 0)
             {
                 int32_t isect_id  = id_batch[t];        // flatten index in [B * C * N] or [nnz]
@@ -911,6 +943,31 @@ __global__ void rasterize_gradient_bwd_kernel(
                 // int32_t isect_cid = (isect_id / N) % C;   // intersection camera index
                 int32_t isect_gid = isect_id % N; // intersection gaussian index
                 float *v_rgb_ptr  = (float *)(v_colors) + CDIM * isect_id;
+#    if USE_ROCM
+#    pragma unroll
+                for(uint32_t k = 0; k < CDIM; ++k)
+                {
+                    unsafeAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                }
+
+                float *v_mean_ptr = (float *)(v_means) + 3 * (isect_bid * N + isect_gid);
+                unsafeAtomicAdd(v_mean_ptr, v_mean_local.x);
+                unsafeAtomicAdd(v_mean_ptr + 1, v_mean_local.y);
+                unsafeAtomicAdd(v_mean_ptr + 2, v_mean_local.z);
+
+                float *v_scale_ptr = (float *)(v_scales) + 3 * (isect_bid * N + isect_gid);
+                unsafeAtomicAdd(v_scale_ptr, v_scale_local.x);
+                unsafeAtomicAdd(v_scale_ptr + 1, v_scale_local.y);
+                unsafeAtomicAdd(v_scale_ptr + 2, v_scale_local.z);
+
+                float *v_quat_ptr = (float *)(v_quats) + 4 * (isect_bid * N + isect_gid);
+                unsafeAtomicAdd(v_quat_ptr, v_quat_local.x);
+                unsafeAtomicAdd(v_quat_ptr + 1, v_quat_local.y);
+                unsafeAtomicAdd(v_quat_ptr + 2, v_quat_local.z);
+                unsafeAtomicAdd(v_quat_ptr + 3, v_quat_local.w);
+
+                unsafeAtomicAdd(v_opacities + isect_id, v_opacity_local);
+#    else
 #    pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
@@ -934,6 +991,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 gpuAtomicAdd(v_quat_ptr + 3, v_quat_local.w);
 
                 gpuAtomicAdd(v_opacities + isect_id, v_opacity_local);
+#    endif
             }
         }
     }
@@ -942,12 +1000,21 @@ __global__ void rasterize_gradient_bwd_kernel(
     if(v_rays != nullptr && pixel_valid)
     {
         float *vr = (float *)(v_rays) + 6 * pix_id;
+#    if USE_ROCM
+        unsafeAtomicAdd(vr + 0, v_ray_o.x);
+        unsafeAtomicAdd(vr + 1, v_ray_o.y);
+        unsafeAtomicAdd(vr + 2, v_ray_o.z);
+        unsafeAtomicAdd(vr + 3, v_ray_d.x);
+        unsafeAtomicAdd(vr + 4, v_ray_d.y);
+        unsafeAtomicAdd(vr + 5, v_ray_d.z);
+#    else
         gpuAtomicAdd(vr + 0, v_ray_o.x);
         gpuAtomicAdd(vr + 1, v_ray_o.y);
         gpuAtomicAdd(vr + 2, v_ray_o.z);
         gpuAtomicAdd(vr + 3, v_ray_d.x);
         gpuAtomicAdd(vr + 4, v_ray_d.y);
         gpuAtomicAdd(vr + 5, v_ray_d.z);
+#    endif
     }
 }
 
@@ -1096,10 +1163,25 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
         constexpr uint32_t CDIM       = ChannelsT::value;
         constexpr bool ReturnNormals  = static_cast<bool>(ReturnNormalsT::value);
         constexpr bool UseHitDistance = static_cast<bool>(UseHitDistanceT::value);
+#    if USE_ROCM
+        const uint32_t block_size = tile_size * tile_size;
+        const uint32_t warps_per_block = (block_size + 63) / 64;
+        std::size_t warp_scratch_bytes
+            = warps_per_block * sizeof(typename rocprim::warp_reduce<float, 64>::storage_type);
+        int64_t shmem_size = tile_size
+                           * tile_size
+                           * (sizeof(int32_t)
+                              + sizeof(vec4)
+                              + sizeof(vec3)
+                              + sizeof(vec4)
+                              + sizeof(float) * cdim_smem_stride<CDIM>())
+                           + warp_scratch_bytes;
+#    else
         int64_t shmem_size
             = tile_size
             * tile_size
             * (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * cdim_smem_stride<CDIM>());
+#    endif
 
         // Shape parity check for the fwd-persisted state. fwd allocates with
         // shape `[total_batches, state_dim, pixels_per_tile]` and fills every
@@ -1157,6 +1239,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
         // one CDIM dot + one vec3 dot per thread, at the cost of one extra
         // CSR slot read per batch (the terminal slot).
         dim3 grad_grid = {static_cast<uint32_t>(total_batches), 1, 1};
+#    ifndef USE_ROCM
         if(cudaFuncSetAttribute(
                rasterize_gradient_bwd_kernel<CDIM, ReturnNormals, UseHitDistance, float>,
                cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -1166,8 +1249,24 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
         {
             AT_ERROR("Failed to set shmem for gradient kernel (", shmem_size, " bytes).");
         }
+#    else
+        hipError_t err = hipFuncSetAttribute(
+            reinterpret_cast<void *>(rasterize_gradient_bwd_kernel<CDIM, ReturnNormals, UseHitDistance, float>),
+            hipFuncAttributeMaxDynamicSharedMemorySize,
+            static_cast<int>(shmem_size)
+        );
+        if(err != hipSuccess)
+        {
+            AT_ERROR(
+                "Failed to set shmem for gradient kernel (",
+                shmem_size,
+                " bytes). HIP Error: ",
+                hipGetErrorString(err)
+            );
+        }
+#    endif
         rasterize_gradient_bwd_kernel<CDIM, ReturnNormals, UseHitDistance, float>
-            <<<grad_grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            <<<grad_grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
                 B,
                 C,
                 N,

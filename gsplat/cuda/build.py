@@ -145,7 +145,8 @@ def get_build_parameters():
         extra_cflags += ["-arch", "arm64"]
         extra_ldflags += ["-arch", "arm64"]
 
-    extra_cuda_cflags += ["--forward-unknown-opts"]
+    if not torch.version.hip:
+        extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
     # MSVC (cl) does not support -O3/-O0; use -O2/-Od (torch converts - to /)

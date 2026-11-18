@@ -64,7 +64,7 @@ template<
     bool SAFE_MASKED_OUTPUTS = true
 >
 __global__ void
-    __launch_bounds__(CTA_SIZE, min_blocks_for_cdim<CDIM, CTA_SIZE>()) rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
+    GSPLAT_LAUNCH_BOUNDS_CTA(CDIM, CTA_SIZE) rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
         const uint32_t C,
         const uint32_t N,
         const int64_t n_isects,
@@ -673,6 +673,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
         const int64_t shmem_size
             = CTA_SIZE * (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3) + sizeof(vec3));
 
+#    ifndef USE_ROCM
         if(cudaFuncSetAttribute(
                rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel<
                    CDIM,
@@ -689,6 +690,28 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
         {
             AT_ERROR("Failed to set maximum shared memory size (requested ", shmem_size, " bytes).");
         }
+#    else
+        hipError_t err = hipFuncSetAttribute(
+            reinterpret_cast<void *>(rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel<
+                                     CDIM,
+                                     TILE_SIZE,
+                                     CTA_SIZE,
+                                     ReturnNormals,
+                                     UseHitDistance,
+                                     SAFE_MASKED_OUTPUTS>),
+            hipFuncAttributeMaxDynamicSharedMemorySize,
+            static_cast<int>(shmem_size)
+        );
+        if(err != hipSuccess)
+        {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size,
+                " bytes). HIP Error: ",
+                hipGetErrorString(err)
+            );
+        }
+#    endif
 
         rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel<
             CDIM,
@@ -697,7 +720,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
             ReturnNormals,
             UseHitDistance,
             SAFE_MASKED_OUTPUTS
-        ><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+        ><<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
             C,
             N,
             n_isects,

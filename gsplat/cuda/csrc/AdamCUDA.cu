@@ -25,6 +25,7 @@
 #    include <c10/cuda/CUDAStream.h> // at::cuda::getCurrentCUDAStream
 #    include <cooperative_groups.h>
 
+#    include "Common.h"
 #    include "Null.h"
 
 namespace gsplat
@@ -102,7 +103,7 @@ void launch_adam_kernel(
         "adam_kernel",
         [&]()
         {
-            adam_kernel<scalar_t><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            adam_kernel<scalar_t><<<grid, threads, shmem_size, GET_CURRENT_STREAM()>>>(
                 N,
                 D,
                 param.data_ptr<scalar_t>(),

@@ -27,7 +27,17 @@
 
 constexpr float kNormalize3NormSqFloor = 1.0e-20f;
 constexpr int kWarpSize                = 32;
-constexpr unsigned int kFullWarpMask   = 0xFFFFFFFFu;
+// The warp-shuffle mask must be a 64-bit integer on ROCm (wavefront-64); HIP's
+// __shfl_*_sync static_asserts sizeof(mask) == 8. CUDA uses a 32-bit lane mask.
+// The reductions below only xor within 32-lane subgroups (offset <= 16), so a
+// full mask is correct on both a 32-wide warp and a 64-wide wavefront.
+#if defined(USE_ROCM) || defined(__HIP_PLATFORM_AMD__)
+using WarpMask                         = unsigned long long;
+constexpr WarpMask kFullWarpMask       = 0xFFFFFFFFFFFFFFFFull;
+#else
+using WarpMask                         = unsigned int;
+constexpr WarpMask kFullWarpMask       = 0xFFFFFFFFu;
+#endif
 
 // ===========================================================================
 // float3 arithmetic
