@@ -57,6 +57,13 @@ Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gspla
 
 **Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
 
+> **Building on a CUDA 12.x toolkit?** The sources target CCCL 3.0 (CUDA 13);
+> CUDA 12.x needs a small `cuda::ceil_div` compatibility shim that is
+> force-included at build time. See [docs/CUDA12.md](docs/CUDA12.md).
+>
+> **Using this fork as a dependency of another project?** See
+> [docs/CONSUMING.md](docs/CONSUMING.md) for git, wheel and path installs.
+
 The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
 
 ```bash

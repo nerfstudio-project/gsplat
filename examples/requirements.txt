@@ -1,7 +1,7 @@
 # torch, torchvision MUST be pre-installed (internal builds matching each other).
 # Pin torch here so pip cannot silently downgrade it when resolving transitive
 # dependencies (e.g. torchvision from PyPI would pull a public torch build).
-torch==2.9.1
+torch==2.14.1+cu126
 nvidia-ncore>=19.0.0
 
 # Official COLMAP Python bindings for data parsing
@@ -9,7 +9,7 @@ pycolmap>=3.10.0
 # (optional) nerfacc for torch version rasterization
 # git+https://github.com/nerfstudio-project/nerfacc
 
-torchvision==0.24.1
+torchvision==0.29.1+cu126
 viser
 git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787
 imageio[ffmpeg]

@@ -8,6 +8,16 @@ Clone the repository and submodules with
 git clone --recurse-submodules URL
 ```
 
+Building with a **CUDA 12.x** toolkit additionally requires the
+`cuda::ceil_div` compatibility shim described in [CUDA12.md](CUDA12.md).
+
+Source builds also need the vendored CUDA headers submodule
+(`git clone --recurse-submodules` already initialises it):
+
+```bash
+git submodule update --init gsplat/cuda/csrc/third_party/glm
+```
+
 For CUDA development, it is recommend to install with `BUILD_NO_CUDA=1`, which
 will disable compiling during pip install, and instead use JIT compiling on your
 first run. The benefit of JIT compiling is that it does incremental compiling as
