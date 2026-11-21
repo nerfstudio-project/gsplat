@@ -292,6 +292,7 @@ def _setup():
         # extensions, so a future source/header isn't silently dropped from
         # wheels (and matches MANIFEST.in's recursive-include breadth).
         package_data={
+            "gsplat.cuda": ["include/*"],
             "gsplat.geometry": [
                 "kernels/cuda/*.cpp",
                 "kernels/cuda/csrc/*",

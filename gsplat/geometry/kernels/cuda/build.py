@@ -76,6 +76,14 @@ def get_build_parameters() -> SimpleNamespace:
 
     if sys.platform != "win32":
         extra_cuda_cflags += extra_cflags
+
+    # CUDA 12.x compatibility: these sources call ::cuda::ceil_div, an API
+    # introduced with CCCL 3.0 (CUDA 13). CudaCompat.h provides it for older
+    # toolkits and is a no-op on CUDA >= 13, so pre-include it when present.
+    # NVCC_FLAGS can still be used to add user flags on top.
+    _cuda_compat_header = os.path.abspath(os.path.join(PATH, "..", "..", "..", "cuda", "include", "CudaCompat.h"))
+    if os.path.isfile(_cuda_compat_header):
+        extra_cuda_cflags += ["-include", _cuda_compat_header]
     extra_cuda_cflags += [] if NVCC_FLAGS == "" else NVCC_FLAGS.split(" ")
 
     return SimpleNamespace(
