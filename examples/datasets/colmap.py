@@ -174,7 +174,7 @@ class Parser:
             params, camtype = _camera_distortion(cam)
             params_dict[camera_id] = params
             camtype_dict[camera_id] = camtype
-            imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
+            imsize_dict[camera_id] = (cam.width / factor, cam.height / factor)
             mask_dict[camera_id] = None
         print(
             f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
@@ -362,7 +362,7 @@ class Parser:
             K[1, :] *= s_height
             self.Ks_dict[camera_id] = K
             width, height = self.imsize_dict[camera_id]
-            self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
+            self.imsize_dict[camera_id] = (round(width * s_width), round(height * s_height))
 
         # undistortion
         self.mapx_dict = dict()
