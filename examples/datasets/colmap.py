@@ -351,18 +351,22 @@ class Parser:
         else:
             self.exposure_values = [None] * len(image_paths)
 
-        # load one image to check the size. In the case of tanksandtemples dataset, the
-        # intrinsics stored in COLMAP corresponds to 2x upsampled images.
-        actual_image = imageio.imread(self.image_paths[0])[..., :3]
-        actual_height, actual_width = actual_image.shape[:2]
-        colmap_width, colmap_height = self.imsize_dict[self.camera_ids[0]]
-        s_height, s_width = actual_height / colmap_height, actual_width / colmap_width
+        # Check each camera's size against one of its images, and fit its
+        # intrinsics to them. The images may not be COLMAP's size divided by
+        # the factor: rounded when the factor doesn't divide it, or, in the
+        # case of tanksandtemples dataset, the intrinsics stored in COLMAP
+        # correspond to 2x upsampled images. Only the image's header is read.
+        image_of_camera = dict()
+        for camera_id, image_path in zip(self.camera_ids, self.image_paths):
+            image_of_camera.setdefault(camera_id, image_path)
         for camera_id, K in self.Ks_dict.items():
-            K[0, :] *= s_width
-            K[1, :] *= s_height
+            with Image.open(image_of_camera[camera_id]) as image:
+                actual_width, actual_height = image.size
+            colmap_width, colmap_height = self.imsize_dict[camera_id]
+            K[0, :] *= actual_width / colmap_width
+            K[1, :] *= actual_height / colmap_height
             self.Ks_dict[camera_id] = K
-            width, height = self.imsize_dict[camera_id]
-            self.imsize_dict[camera_id] = (round(width * s_width), round(height * s_height))
+            self.imsize_dict[camera_id] = (actual_width, actual_height)
 
         # undistortion
         self.mapx_dict = dict()
